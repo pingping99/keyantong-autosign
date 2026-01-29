@@ -170,7 +170,6 @@ Cookie: _identity-frontend=xxx; _csrf=xxx; advanced-frontend=xxx; ...
 4. **频率限制**: 每天只能签到一次
 5. **会话过期**: Cookie 有效期为 30 天 (`Max-Age=2592000`)
 
----
 
 ## 长期运行与状态记录
 
@@ -181,10 +180,13 @@ Cookie: _identity-frontend=xxx; _csrf=xxx; advanced-frontend=xxx; ...
 - **成功条件**: 只有 `SignState.last_sign_date` 不等于当天日期时才会触发展示，执行 `AutoSign` 并更新状态。
 
 ## Docker 运行说明
-
 1. 构建镜像：
-```bash
+
+   - 在 builder 阶段中使用 `go build -o /app/signbot .`，确保只为主包生成单个可执行文件，避免多个包写入非目录路径时出现的构建失败。
+   - 生成镜像：
+```
 docker build -t ablesci-sign .
+```
 ```
 2. 运行时：
 ```bash
@@ -215,3 +217,4 @@ compose 默认挂载 `./data` 到 `/app/data`，并复用环境变量（适配 `
 - 基于抓包分析的 Chrome 144.0.0.0 请求
 - 更新 CSRF 解析方式：优先读取 meta 标签，其次匹配更通用的 hidden input（含 g_csrf_token）
 - 登录接口改用页面当前字段（email/password/remember），保持与前端表单一致
+- 修复 Docker 多包构建失败，在 builder 阶段改用 `go build -o /app/signbot .`，保证只生成一个可执行文件

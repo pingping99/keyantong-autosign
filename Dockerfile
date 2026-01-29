@@ -6,7 +6,7 @@ WORKDIR /src
 COPY . .
 
 RUN go mod tidy
-RUN go build -o /app/signbot ./...
+RUN go build -o /app/signbot .
 
 FROM alpine:3.21
 

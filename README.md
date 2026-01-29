@@ -1,6 +1,6 @@
 # AbleSci 自动签到脚本
 
-基于 Go 语言开发的科研通（AbleSci.com）自动签到脚本。
+基于 Go 语言开发的科研通（AbleSci.com）自动签到脚本。项目已在 GitHub 开源：<https://github.com/pingping99/keyantong-autosign>。
 
 ## 功能特性
 
@@ -97,7 +97,54 @@ go build -o ablesci-sign.exe
 0 8 * * * cd /path/to/keyantong && ./ablesci-sign >> sign.log 2>&1
 ```
 
-## 技术栈
+## Docker Compose 安装
+
+1. 克隆源码：
+
+```bash
+git clone https://github.com/pingping99/keyantong-autosign.git
+cd keyantong-autosign
+```
+
+2. 可选将环境变量写入 `.env` 文件（Docker Compose 会自动加载）：
+
+```dotenv
+ABLESCI_EMAIL=you@example.com
+ABLESCI_PASSWORD=secret
+CHECK_INTERVAL=30m           # 每次签到检查间隔
+SIGN_WINDOW_START=08:00
+SIGN_WINDOW_END=08:10
+TZ=Asia/Shanghai
+DATA_DIR=/app/data           # 容器内部日志/状态目录
+```
+
+3. 启动容器：
+
+```bash
+docker compose up -d --build
+```
+
+4. 可选查看日志和状态：
+
+```bash
+docker compose logs -f ablesci-sign
+docker compose exec ablesci-sign cat /app/data/sign.log
+```
+
+5. 停止并清理：
+
+```bash
+docker compose down
+```
+
+### 环境变量说明
+
+- `ABLESCI_EMAIL`：AbleSci 登录邮箱（必填）
+- `ABLESCI_PASSWORD`：AbleSci 登录密码（必填）
+- `CHECK_INTERVAL`：签到检查频率，支持 Go `time.Duration` 表达式（默认 `30m`）
+- `SIGN_WINDOW_START`、`SIGN_WINDOW_END`：允许签到的时间窗口（格式 `HH:MM`）
+- `TZ`：运行时时区（默认 `Asia/Shanghai`）
+- `DATA_DIR`：日志和状态存放路径（默认 `/app/data`），可通过 `docker volume` 挂载到宿主机便于持久化。
 
 - Go 1.21+
 - net/http - HTTP 请求
