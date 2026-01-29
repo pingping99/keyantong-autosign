@@ -1,0 +1,25 @@
+version: '3.9'
+
+services:
+  ablesci-sign:
+    build: .
+    image: ablesci-sign:latest
+    container_name: ablesci-sign
+    restart: unless-stopped
+    environment:
+      - ABLESCI_EMAIL=your@example.com
+      - ABLESCI_PASSWORD=secret
+      - CHECK_INTERVAL=30m
+      - SIGN_WINDOW_START=08:00
+      - SIGN_WINDOW_END=08:10
+      - TZ=Asia/Shanghai
+      - DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: "json-file"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep signbot || exit 1"]
+      interval: 10m
+      timeout: 5s
+      retries: 3

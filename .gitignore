@@ -1,0 +1,22 @@
+# Configuration file with credentials
+config.yaml
+
+# Binary files
+*.exe
+ablesci-sign
+ablesci-sign.exe
+
+# Logs
+*.log
+sign.log
+
+# Go build artifacts
+/vendor/
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

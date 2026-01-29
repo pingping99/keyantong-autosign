@@ -1,0 +1,217 @@
+# AbleSci API 接口文档
+
+## 基础信息
+
+- **基础域名**: `https://www.ablesci.com`
+- **请求格式**: `application/x-www-form-urlencoded` (登录), `application/json` (签到响应)
+- **认证方式**: Cookie-based session (使用 `_identity-frontend` cookie)
+
+---
+
+## 接口列表
+
+### 1. 获取登录页面
+
+#### 接口信息
+- **URL**: `GET https://www.ablesci.com/site/login`
+- **用途**: 获取 CSRF Token
+
+#### 请求头
+```
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
+Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
+```
+
+#### 响应
+- HTML 页面包含用于 CSRF 保护的 token
+- 格式多样：
+  - `<meta name="csrf-token" content="xxx">`
+  - `<input type="hidden" name="_csrf" ... value="xxx">`（允许其他属性）
+  - `<input type="hidden" id="g_csrf_token" value="xxx">`
+
+---
+
+### 2. 用户登录
+
+#### 接口信息
+- **URL**: `POST https://www.ablesci.com/site/login`
+- **Content-Type**: `application/x-www-form-urlencoded; charset=UTF-8`
+
+#### 请求头
+```
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36
+Accept: application/json, text/javascript, */*; q=0.01
+Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
+Accept-Encoding: gzip, deflate, br, zstd
+X-Requested-With: XMLHttpRequest
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Origin: https://www.ablesci.com
+Referer: https://www.ablesci.com/site/login
+Sec-CH-UA: "Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"
+Sec-CH-UA-Mobile: ?0
+Sec-CH-UA-Platform: "Windows"
+Sec-Fetch-Site: same-origin
+Sec-Fetch-Mode: cors
+Sec-Fetch-Dest: empty
+```
+
+#### 请求参数
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| _csrf | string | 是 | CSRF Token，从登录页面获取（支持 meta + hidden input）
+| email | string | 是 | 用户邮箱
+| password | string | 是 | 用户密码
+| remember | string | 否 | 记住我，值为 "1"
+
+#### 请求示例
+```
+_csrf=xxx&LoginForm[email]=user@example.com&LoginForm[password]=password&LoginForm[rememberMe]=1
+```
+
+#### 响应示例
+**成功 (200 OK):**
+```json
+{
+  "code": 0,
+  "msg": "登录成功",
+  "data": {...}
+}
+```
+
+**失败:**
+```json
+{
+  "code": 1,
+  "msg": "用户名或密码错误"
+}
+```
+
+#### 响应 Cookie
+登录成功后，服务器会设置以下关键 Cookie：
+- `_identity-frontend`: 用户身份标识，用于后续签到请求
+- `_csrf`: 新的 CSRF Token
+- `advanced-frontend`: 会话标识
+
+---
+
+### 3. 每日签到
+
+#### 接口信息
+- **URL**: `GET https://www.ablesci.com/user/sign`
+- **认证**: 需要登录后的 Cookie (`_identity-frontend`)
+
+#### 请求头
+```
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36
+Accept: application/json, text/javascript, */*; q=0.01
+Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
+Accept-Encoding: gzip, deflate, br, zstd
+X-Requested-With: XMLHttpRequest
+Referer: https://www.ablesci.com/
+Sec-CH-UA: "Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"
+Sec-CH-UA-Mobile: ?0
+Sec-CH-UA-Platform: "Windows"
+Sec-Fetch-Site: same-origin
+Sec-Fetch-Mode: cors
+Sec-Fetch-Dest: empty
+Cookie: _identity-frontend=xxx; _csrf=xxx; advanced-frontend=xxx; ...
+```
+
+#### 响应示例
+**成功 (200 OK):**
+```json
+{
+  "code": 0,
+  "msg": "签到成功，您已连续签到 1 次，本次获得 20 积分。注：本次签到触发低分保护机制，您获得了2倍签到积分。",
+  "data": {
+    "signcount": 1,
+    "signpoint": 20,
+    "today_history": "<div>...</div>",
+    "is_alert": 1
+  }
+}
+```
+
+**已签到:**
+```json
+{
+  "code": 1,
+  "msg": "今天已经签到过了"
+}
+```
+
+#### 响应字段说明
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| code | int | 状态码，0=成功，非0=失败 |
+| msg | string | 提示消息 |
+| data.signcount | int | 连续签到天数 |
+| data.signpoint | int | 本次获得积分 |
+| data.today_history | string | 历史上的今天（HTML） |
+| data.is_alert | int | 是否显示提示，1=是 |
+
+---
+
+## 错误码说明
+
+| 错误码 | 说明 |
+|--------|------|
+| 0 | 操作成功 |
+| 1 | 操作失败（具体原因见 msg 字段） |
+
+---
+
+## 注意事项
+
+1. **CSRF 保护**: 所有 POST 请求需要携带有效的 CSRF Token
+2. **Cookie 管理**: 登录后的 Cookie 需要在后续请求中携带
+3. **User-Agent**: 建议使用真实浏览器的 User-Agent
+4. **频率限制**: 每天只能签到一次
+5. **会话过期**: Cookie 有效期为 30 天 (`Max-Age=2592000`)
+
+---
+
+## 长期运行与状态记录
+
+- **触发方式**: 通过环境变量配置 `ABLESCI_EMAIL`、`ABLESCI_PASSWORD`、`SIGN_WINDOW_START`、`SIGN_WINDOW_END`、`CHECK_INTERVAL` 以及 `TZ`。
+- **签到窗口**: 默认 08:00 到 08:10，仅在窗口内尝试签到。
+- **状态存储**: `/data/state.json` 记录 `last_sign_date`，避免重复签到；数据与日志目录可通过 `DATA_DIR` 环境变量覆盖。
+- **日志**: 每次运行会追加到 `/data/sign.log`，日志同时输出到 stdout 便于容器查看。
+- **成功条件**: 只有 `SignState.last_sign_date` 不等于当天日期时才会触发展示，执行 `AutoSign` 并更新状态。
+
+## Docker 运行说明
+
+1. 构建镜像：
+```bash
+docker build -t ablesci-sign .
+```
+2. 运行时：
+```bash
+docker run -d \
+  -e ABLESCI_EMAIL=you@example.com \
+  -e ABLESCI_PASSWORD=secret \
+  -e CHECK_INTERVAL=30m \
+  -e SIGN_WINDOW_START=08:00 \
+  -e SIGN_WINDOW_END=08:10 \
+  -e TZ=Asia/Shanghai \
+  -e DATA_DIR=/app/data \
+  -v /host/path/data:/app/data \
+  ablesci-sign
+```
+3. 可选使用 docker compose：
+```bash
+docker compose up -d
+```
+compose 默认挂载 `./data` 到 `/app/data`，并复用环境变量（适配 `docker-compose.yml`）。
+3. DATA_DIR 下保留 `sign.log` 和 `state.json`，便于检查运行情况并避免重复签到。
+
+---
+
+## 变更历史
+
+### 2026-01-29
+- 初始版本，记录登录和签到接口
+- 基于抓包分析的 Chrome 144.0.0.0 请求
+- 更新 CSRF 解析方式：优先读取 meta 标签，其次匹配更通用的 hidden input（含 g_csrf_token）
+- 登录接口改用页面当前字段（email/password/remember），保持与前端表单一致
