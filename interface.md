@@ -210,11 +210,86 @@ compose 默认挂载 `./data` 到 `/app/data`，并复用环境变量（适配 `
 
 ---
 
+## 代码架构设计
+
+### 模块划分
+
+项目已完成解耦重构，按照职责分离原则拆分为以下模块：
+
+#### 1. `domain/` - 领域模型
+- `account.go`: 账号实体定义，包含邮箱、密码和唯一ID
+- `state.go`: 签到状态实体，记录最后签到日期
+
+#### 2. `store/` - 状态存储抽象
+- `state_store.go`: 定义 `StateStore` 接口，抽象状态持久化操作
+  ```go
+  type StateStore interface {
+      Load(accountID string) (*domain.SignState, error)
+      Save(accountID string, state *domain.SignState) error
+  }
+  ```
+- `file_store.go`: 文件系统实现，将状态保存为 JSON 文件
+
+#### 3. `config/` - 配置管理
+- `config.go`: 统一管理环境变量读取、时间窗解析、账号加载等配置逻辑
+- 职责：配置初始化与验证，返回 `AppConfig` 结构
+
+#### 4. `scheduler/` - 调度工具
+- `window.go`: 时间窗判断与格式化工具函数
+  - `IsWithinWindow()`: 判断当前时间是否在签到窗口内
+  - `FormatWindow()`: 格式化时间窗为 HH:MM
+
+#### 5. `signer/` - 签到流程编排
+- `signer.go`: 定义 `Signer` 接口及实现 `AccountSigner`
+  ```go
+  type Signer interface {
+      AttemptSign(now time.Time) error
+      ForceSign(now time.Time) error
+  }
+  ```
+- 职责：封装签到业务逻辑，包括窗口检查、状态管理、登录重试
+
+#### 6. `service/` - HTTP 服务层（已存在）
+- `sign.go`: 封装 AbleSci API 调用（登录、签到、CSRF获取）
+
+#### 7. `client/` - HTTP 客户端（已存在）
+- `client.go`: 封装 HTTP 客户端与 Cookie 管理
+
+#### 8. `main.go` - 应用入口（重构后）
+- 精简为依赖注入（DI）+ 启动逻辑
+- 职责：组装各模块、启动定时任务
+- 代码行数从 400+ 减少到 100-
+
+### 接口设计原则
+
+1. **依赖倒置**：`signer` 依赖 `StateStore` 接口而非具体实现，便于测试与扩展
+2. **单一职责**：每个包专注于单一功能领域
+3. **开闭原则**：通过接口扩展新功能，无需修改现有代码
+
+---
+
 ## 变更历史
 
-### 2026-01-29
+### 2026-01-29（解耦重构）
+- **架构重构**：将 main.go 的 400+ 行代码按职责拆分为 8 个模块
+- **新增接口抽象**：
+  - `store.StateStore`: 状态存储接口
+  - `signer.Signer`: 签到流程接口
+- **新增包**：
+  - `domain`: 领域模型（Account, SignState）
+  - `store`: 状态持久化抽象与实现
+  - `config`: 配置加载与解析
+  - `scheduler`: 时间窗工具函数
+  - `signer`: 签到业务流程编排
+- **main.go 重构**：精简为依赖注入与启动逻辑，提升可测试性与可维护性
+
+### 2026-01-29（初版）
 - 初始版本，记录登录和签到接口
 - 基于抓包分析的 Chrome 144.0.0.0 请求
 - 更新 CSRF 解析方式：优先读取 meta 标签，其次匹配更通用的 hidden input（含 g_csrf_token）
 - 登录接口改用页面当前字段（email/password/remember），保持与前端表单一致
 - 修复 Docker 多包构建失败，在 builder 阶段改用 `go build -o /app/signbot .`，保证只生成一个可执行文件
+- **新增多账号支持**：通过 `data/accounts.json` 配置多个账号，每个账号状态独立管理
+- **新增首次使用检测**：通过检查日志文件是否为空来判定首次运行，自动执行登录和签到
+- **新增登录状态检查**：每次签到前检查返回结果，如需要登录则自动重新登录后再签到
+- 状态文件改为按账号独立保存（`state_<账号hash>.json`），避免多账号状态冲突

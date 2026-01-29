@@ -9,6 +9,9 @@
 - ✅ 支持 CSRF 令牌验证
 - ✅ Cookie 会话管理
 - ✅ 详细的签到结果显示
+- ✅ 首次使用自动登录签到
+- ✅ 多账号支持
+- ✅ 登录状态检查与自动重登录
 
 ## 项目结构
 
@@ -35,17 +38,36 @@ go mod tidy
 
 ### 2. 配置账号
 
+#### 方式一：使用 accounts.json（推荐，支持多账号）
+
 复制配置文件模板并填写您的账号信息：
 
 ```bash
-cp config.yaml.example config.yaml
+cp data/accounts.json.example data/accounts.json
 ```
 
-编辑 `config.yaml`：
+编辑 `data/accounts.json`：
 
-```yaml
-email: "your_email@example.com"
-password: "your_password"
+```json
+{
+  "accounts": [
+    {
+      "email": "your_email1@example.com",
+      "password": "your_password1"
+    },
+    {
+      "email": "your_email2@example.com",
+      "password": "your_password2"
+    }
+  ]
+}
+```
+
+#### 方式二：使用环境变量（单账号）
+
+```bash
+export ABLESCI_EMAIL="your_email@example.com"
+export ABLESCI_PASSWORD="your_password"
 ```
 
 ### 3. 运行脚本
@@ -77,9 +99,12 @@ go build -o ablesci-sign.exe
 
 ## 注意事项
 
-- 请妥善保管 `config.yaml` 文件，不要提交到版本控制系统
+- 请妥善保管 `data/accounts.json` 文件，不要提交到版本控制系统
 - 建议配合定时任务（如 cron、Windows 任务计划程序）实现每日自动签到
 - 本脚本仅供学习交流使用
+- 首次运行时会自动执行登录与签到（基于日志文件是否为空判定）
+- 每个账号的签到状态独立保存在 `data/state_<账号hash>.json`
+- 程序运行时会自动检查登录状态，如果会话失效会自动重新登录
 
 ## 定时任务配置
 
@@ -139,12 +164,35 @@ docker compose down
 
 ### 环境变量说明
 
-- `ABLESCI_EMAIL`：AbleSci 登录邮箱（必填）
-- `ABLESCI_PASSWORD`：AbleSci 登录密码（必填）
+- `ABLESCI_EMAIL`：AbleSci 登录邮箱（当 accounts.json 不存在时必填，单账号模式）
+- `ABLESCI_PASSWORD`：AbleSci 登录密码（当 accounts.json 不存在时必填，单账号模式）
 - `CHECK_INTERVAL`：签到检查频率，支持 Go `time.Duration` 表达式（默认 `30m`）
 - `SIGN_WINDOW_START`、`SIGN_WINDOW_END`：允许签到的时间窗口（格式 `HH:MM`）
 - `TZ`：运行时时区（默认 `Asia/Shanghai`）
-- `DATA_DIR`：日志和状态存放路径（默认 `/app/data`），可通过 `docker volume` 挂载到宿主机便于持久化。
+- `DATA_DIR`：日志和状态存放路径（默认 `./data`），可通过 `docker volume` 挂载到宿主机便于持久化
+
+### 多账号配置
+
+在 `DATA_DIR` 目录下创建 `accounts.json` 文件（参考 `data/accounts.json.example`）：
+
+```json
+{
+  "accounts": [
+    {
+      "email": "account1@example.com",
+      "password": "password1"
+    },
+    {
+      "email": "account2@example.com",
+      "password": "password2"
+    }
+  ]
+}
+```
+
+- 程序优先读取 `accounts.json`，如不存在则回退到环境变量（单账号模式）
+- 每个账号的状态独立管理，互不影响
+- 首次运行时，所有账号都会立即执行一次登录和签到
 
 - Go 1.21+
 - net/http - HTTP 请求
