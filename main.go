@@ -22,7 +22,6 @@ func main() {
 
 	// Setup logging
 	logFilePath := filepath.Join(cfg.DataDir, "sign.log")
-	firstRun := isFirstRun(logFilePath)
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o664)
 	if err != nil {
 		log.Fatalf("Failed to open log file %q: %v", logFilePath, err)
@@ -47,14 +46,12 @@ func main() {
 		scheduler.FormatWindow(cfg.WindowStart), scheduler.FormatWindow(cfg.WindowEnd),
 		cfg.CheckInterval, cfg.Location, len(signers))
 
-	// Force sign on first run
-	if firstRun {
-		log.Printf("首次运行检测：%s 为空，立即执行登录并签到", logFilePath)
-		now := time.Now()
-		for _, s := range signers {
-			if err := s.ForceSign(now); err != nil {
-				log.Printf("强制签到失败: %v", err)
-			}
+	// Force sign on startup (ignore time window)
+	log.Printf("程序启动，立即执行登录并签到（无视时间窗口）")
+	now := time.Now()
+	for _, s := range signers {
+		if err := s.ForceSign(now); err != nil {
+			log.Printf("启动签到失败: %v", err)
 		}
 	}
 
@@ -93,13 +90,4 @@ func runChecks(signers []signer.Signer) {
 			log.Printf("签到失败: %v", err)
 		}
 	}
-}
-
-// isFirstRun checks if this is the first run by checking log file.
-func isFirstRun(logPath string) bool {
-	info, err := os.Stat(logPath)
-	if err != nil {
-		return os.IsNotExist(err)
-	}
-	return info.Size() == 0
 }

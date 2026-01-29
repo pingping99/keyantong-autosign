@@ -42,11 +42,11 @@ func NewAccountSigner(
 	}
 }
 
-// ForceSign performs forced sign-in (used on first run).
+// ForceSign performs forced sign-in (used on startup).
 func (as *AccountSigner) ForceSign(now time.Time) error {
-	log.Printf("%s 首次运行强制执行登录与签到", as.logPrefix)
+	log.Printf("%s 强制执行登录与签到", as.logPrefix)
 	if err := as.service.AutoSign(); err != nil {
-		return fmt.Errorf("首次签到失败: %w", err)
+		return fmt.Errorf("强制签到失败: %w", err)
 	}
 
 	today := now.In(as.cfg.Location).Format(config.DateLayout)

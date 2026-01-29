@@ -26,6 +26,10 @@ func (fs *FileStore) Load(accountID string) (*domain.SignState, error) {
 	path := filepath.Join(fs.dataDir, fmt.Sprintf("state_%s.json", accountID))
 	data, err := os.ReadFile(path)
 	if err != nil {
+		// Return empty state if file doesn't exist (not an error on first run)
+		if os.IsNotExist(err) {
+			return &domain.SignState{}, nil
+		}
 		return &domain.SignState{}, err
 	}
 	var state domain.SignState
