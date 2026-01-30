@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+// fileLogger is used for logging only to file (not to stdout)
+var fileLogger *log.Logger
+
 func main() {
 	// Load configuration
 	cfg, err := config.Load()
@@ -29,6 +32,9 @@ func main() {
 	defer logFile.Close()
 	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
 	log.SetFlags(log.LstdFlags)
+
+	// Setup file-only logger (for quiet logs outside sign window)
+	fileLogger = log.New(logFile, "", log.LstdFlags)
 
 	// Initialize state store
 	stateStore, err := store.NewFileStore(cfg.DataDir)
@@ -76,7 +82,7 @@ func buildSigners(cfg *config.AppConfig, store store.StateStore) []signer.Signer
 			log.Printf("[%s] 初始化 service 失败: %v", account.Email, err)
 			continue
 		}
-		s := signer.NewAccountSigner(account, svc, store, cfg)
+		s := signer.NewAccountSigner(account, svc, store, cfg, fileLogger)
 		signers = append(signers, s)
 	}
 	return signers

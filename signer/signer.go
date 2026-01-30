@@ -19,11 +19,12 @@ type Signer interface {
 
 // AccountSigner implements Signer using service.Service.
 type AccountSigner struct {
-	account   domain.Account
-	service   *service.Service
-	store     store.StateStore
-	cfg       *config.AppConfig
-	logPrefix string
+	account    domain.Account
+	service    *service.Service
+	store      store.StateStore
+	cfg        *config.AppConfig
+	logPrefix  string
+	fileLogger *log.Logger
 }
 
 // NewAccountSigner creates a new account signer.
@@ -32,13 +33,15 @@ func NewAccountSigner(
 	svc *service.Service,
 	store store.StateStore,
 	cfg *config.AppConfig,
+	fileLogger *log.Logger,
 ) *AccountSigner {
 	return &AccountSigner{
-		account:   account,
-		service:   svc,
-		store:     store,
-		cfg:       cfg,
-		logPrefix: fmt.Sprintf("[%s]", account.Email),
+		account:    account,
+		service:    svc,
+		store:      store,
+		cfg:        cfg,
+		logPrefix:  fmt.Sprintf("[%s]", account.Email),
+		fileLogger: fileLogger,
 	}
 }
 
@@ -67,7 +70,8 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 
 	// Check if within window
 	if !scheduler.IsWithinWindow(nowLocal, as.cfg.WindowStart, as.cfg.WindowEnd) {
-		log.Printf("%s 当前时间 %s 不在签到窗口 %s，等待下一次检查",
+		// Log to file only (not to stdout) when outside sign window
+		as.fileLogger.Printf("%s 当前时间 %s 不在签到窗口 %s，等待下一次检查",
 			as.logPrefix, nowLocal.Format("15:04"), windowRange)
 		return nil
 	}
