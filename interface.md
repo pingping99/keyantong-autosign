@@ -173,8 +173,12 @@ Cookie: _identity-frontend=xxx; _csrf=xxx; advanced-frontend=xxx; ...
 
 ## 长期运行与状态记录
 
-- **触发方式**: 通过环境变量配置 `ABLESCI_EMAIL`、`ABLESCI_PASSWORD`、`SIGN_WINDOW_START`、`SIGN_WINDOW_END`、`CHECK_INTERVAL`、`RETRY_INTERVAL`、`FORCE_SIGN_ON_START` 以及 `TZ`。
-- **签到窗口**: 默认 08:00 到 09:00，仅在窗口内尝试签到。
+- **触发方式**: 通过环境变量配置 `ABLESCI_EMAIL`、`ABLESCI_PASSWORD`、`DYNAMIC_WINDOW_START`、`DYNAMIC_WINDOW_END`、`DYNAMIC_WINDOW_SPAN`、`CHECK_INTERVAL`、`RETRY_INTERVAL`、`FORCE_SIGN_ON_START` 以及 `TZ`。
+- **动态签到窗口**: 
+  - 在 `DYNAMIC_WINDOW_START`（默认 08:00）到 `DYNAMIC_WINDOW_END`（默认 18:00）范围内随机生成签到窗口
+  - 窗口时长由 `DYNAMIC_WINDOW_SPAN` 指定（默认 45 分钟）
+  - 每天窗口位置随机，避免固定时间签到被检测
+  - 同一天内窗口保持不变（持久化到状态文件）
 - **重试间隔**: 默认 10 分钟，窗口内签到失败后的最小重试间隔，避免频繁请求。
 - **启动签到**: 默认启用（`FORCE_SIGN_ON_START=true`），程序启动时立即执行签到（无视时间窗口）；设为 `false` 则禁用。
 - **状态存储**: `/data/state_<账号hash>.json` 记录签到状态，包括：
@@ -182,6 +186,9 @@ Cookie: _identity-frontend=xxx; _csrf=xxx; advanced-frontend=xxx; ...
   - `last_attempt_date`: 最后尝试日期
   - `last_attempt_time`: 最后尝试时间（HH:MM）
   - `last_result`: 最后结果（success/failed/skip）
+  - `window_date`: 动态窗口日期（YYYY-MM-DD）
+  - `window_start`: 动态窗口起始时间（HH:MM）
+  - `window_end`: 动态窗口结束时间（HH:MM）
 - **日志**: 每次运行会追加到 `/data/sign.log`，日志同时输出到 stdout 便于容器查看。
   - **窗口外**: 仅写入文件日志，不污染控制台
   - **窗口内**: 重要日志（签到成功/失败）输出到控制台 + 文件
@@ -281,6 +288,35 @@ compose 默认挂载 `./data` 到 `/app/data`，并复用环境变量（适配 `
 ---
 
 ## 变更历史
+
+### 2026-01-31（动态签到窗口）
+- **移除固定签到窗口**：删除 `SIGN_WINDOW_START`、`SIGN_WINDOW_END` 环境变量及相关配置
+- **新增动态窗口机制**：
+  - 新增 `DYNAMIC_WINDOW_START`（默认 08:00）：动态窗口生成范围起始时间
+  - 新增 `DYNAMIC_WINDOW_END`（默认 18:00）：动态窗口生成范围结束时间
+  - 新增 `DYNAMIC_WINDOW_SPAN`（默认 45m）：每日签到窗口时长
+- **扩展状态结构**：`domain.SignState` 新增动态窗口字段：
+  - `WindowDate`: 动态窗口日期（YYYY-MM-DD）
+  - `WindowStart`: 动态窗口起始时间（HH:MM）
+  - `WindowEnd`: 动态窗口结束时间（HH:MM）
+- **scheduler 增强**：
+  - 新增 `GenerateDynamicWindow()`: 基于日期种子生成随机签到窗口
+  - 新增 `ParseTimeWindow()`: 解析 HH:MM 格式时间为 Duration
+- **签到流程优化**：
+  - `getOrGenerateDynamicWindow()`: 每天首次调用时生成窗口，后续复用（持久化）
+  - 窗口生成使用日期作为随机种子，确保同一天窗口一致
+  - 自动保存窗口信息到状态文件，重启后保持不变
+- **配置结构调整**：
+  - `AppConfig` 字段：`WindowStart/End` → `DynamicWindowStart/End/Span`
+  - 环境变量：`SIGN_WINDOW_*` → `DYNAMIC_WINDOW_*`
+- **文档更新**：
+  - README.md: 更新环境变量说明与动态窗口原理
+  - docker-compose.yml: 更新配置示例
+  - interface.md: 补充动态窗口机制说明
+- **影响范围**：
+  - 每天签到时间随机分布在 10 小时范围内（08:00-18:00），避免固定模式
+  - 向后兼容：旧状态文件缺少窗口字段时自动生成
+  - 日志输出包含当日窗口信息，便于调试
 
 ### 2026-01-31（签到逻辑鲁棒性优化）
 - **扩展状态结构**：`domain.SignState` 新增字段：

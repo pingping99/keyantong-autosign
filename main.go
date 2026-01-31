@@ -48,9 +48,9 @@ func main() {
 		log.Fatal("No valid accounts available, exiting")
 	}
 
-	log.Printf("签到窗口 %s-%s，检查间隔 %s，重试间隔 %s，时区 %s，账号数量 %d",
-		scheduler.FormatWindow(cfg.WindowStart), scheduler.FormatWindow(cfg.WindowEnd),
-		cfg.CheckInterval, cfg.RetryInterval, cfg.Location, len(signers))
+	log.Printf("动态签到范围 %s-%s，窗口时长 %s，检查间隔 %s，重试间隔 %s，时区 %s，账号数量 %d",
+		scheduler.FormatWindow(cfg.DynamicWindowStart), scheduler.FormatWindow(cfg.DynamicWindowEnd),
+		cfg.DynamicWindowSpan, cfg.CheckInterval, cfg.RetryInterval, cfg.Location, len(signers))
 
 	// Force sign on startup if configured
 	if cfg.ForceSignOnStart {

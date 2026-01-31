@@ -10,8 +10,9 @@ services:
       - ABLESCI_EMAIL=your@example.com
       - ABLESCI_PASSWORD=secret
       - CHECK_INTERVAL=30m
-      - SIGN_WINDOW_START=08:00
-      - SIGN_WINDOW_END=08:10
+      - DYNAMIC_WINDOW_START=08:00
+      - DYNAMIC_WINDOW_END=18:00
+      - DYNAMIC_WINDOW_SPAN=45m
       - TZ=Asia/Shanghai
       - DATA_DIR=/app/data
     volumes:

@@ -167,9 +167,17 @@ docker compose down
 - `ABLESCI_EMAIL`：AbleSci 登录邮箱（当 accounts.json 不存在时必填，单账号模式）
 - `ABLESCI_PASSWORD`：AbleSci 登录密码（当 accounts.json 不存在时必填，单账号模式）
 - `CHECK_INTERVAL`：签到检查频率，支持 Go `time.Duration` 表达式（默认 `30m`）
-- `SIGN_WINDOW_START`、`SIGN_WINDOW_END`：允许签到的时间窗口（格式 `HH:MM`）
+- `DYNAMIC_WINDOW_START`：动态签到窗口的起始时间（格式 `HH:MM`，默认 `08:00`）
+- `DYNAMIC_WINDOW_END`：动态签到窗口的结束时间（格式 `HH:MM`，默认 `18:00`）
+- `DYNAMIC_WINDOW_SPAN`：每日动态窗口的时长（支持 Go `time.Duration` 表达式，默认 `45m`）
 - `TZ`：运行时时区（默认 `Asia/Shanghai`）
 - `DATA_DIR`：日志和状态存放路径（默认 `./data`），可通过 `docker volume` 挂载到宿主机便于持久化
+
+**动态签到窗口说明**：
+- 程序会在每天的 `DYNAMIC_WINDOW_START` 至 `DYNAMIC_WINDOW_END` 范围内随机生成一个签到窗口
+- 窗口时长由 `DYNAMIC_WINDOW_SPAN` 指定（例如 45 分钟）
+- 每天的窗口位置随机，避免固定时间签到被检测
+- 同一天内窗口保持不变（持久化到状态文件）
 
 ### 多账号配置
 
