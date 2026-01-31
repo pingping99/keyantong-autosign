@@ -53,26 +53,34 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 	}
 
 	today := now.In(as.cfg.Location).Format(config.DateLayout)
-	state := &domain.SignState{LastSignDate: today}
+	nowTime := now.In(as.cfg.Location).Format(config.TimeLayout)
+	state := &domain.SignState{
+		LastSignDate:    today,
+		LastAttemptDate: today,
+		LastAttemptTime: nowTime,
+		LastResult:      "success",
+	}
 	if err := as.store.Save(as.account.ID, state); err != nil {
 		log.Printf("%s 保存状态失败: %v", as.logPrefix, err)
 	}
 	return nil
 }
 
-// AttemptSign attempts to sign in during the configured window.
+// AttemptSign attempts to sign in during the configured window with throttling.
 func (as *AccountSigner) AttemptSign(now time.Time) error {
 	nowLocal := now.In(as.cfg.Location)
 	today := nowLocal.Format(config.DateLayout)
+	nowTime := nowLocal.Format(config.TimeLayout)
 	windowRange := fmt.Sprintf("%s-%s",
 		scheduler.FormatWindow(as.cfg.WindowStart),
 		scheduler.FormatWindow(as.cfg.WindowEnd))
 
 	// Check if within window
-	if !scheduler.IsWithinWindow(nowLocal, as.cfg.WindowStart, as.cfg.WindowEnd) {
+	inWindow := scheduler.IsWithinWindow(nowLocal, as.cfg.WindowStart, as.cfg.WindowEnd)
+	if !inWindow {
 		// Log to file only (not to stdout) when outside sign window
-		as.fileLogger.Printf("%s 当前时间 %s 不在签到窗口 %s，等待下一次检查",
-			as.logPrefix, nowLocal.Format("15:04"), windowRange)
+		as.fileLogger.Printf("%s 当前时间 %s 不在签到窗口 %s",
+			as.logPrefix, nowTime, windowRange)
 		return nil
 	}
 
@@ -85,32 +93,73 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 
 	// Check if already signed today
 	if state.LastSignDate == today {
-		log.Printf("%s 今天 (%s) 已完成签到，跳过", as.logPrefix, today)
+		as.fileLogger.Printf("%s 今天 (%s) 已完成签到，跳过", as.logPrefix, today)
 		return nil
 	}
 
+	// Throttle: check if last attempt was too recent
+	if state.LastAttemptDate == today && state.LastAttemptTime != "" {
+		if as.shouldThrottle(nowLocal, state.LastAttemptTime) {
+			as.fileLogger.Printf("%s 距离上次尝试 (%s) 不足 %v，节流跳过",
+				as.logPrefix, state.LastAttemptTime, as.cfg.RetryInterval)
+			return nil
+		}
+	}
+
+	// Update attempt time before trying
+	state.LastAttemptDate = today
+	state.LastAttemptTime = nowTime
+
 	// Attempt sign
-	log.Printf("%s 签到窗口开启，开始签到... (当前时间 %s)", as.logPrefix, nowLocal.Format("15:04"))
+	log.Printf("%s 签到窗口开启，开始签到... (当前时间 %s)", as.logPrefix, nowTime)
+	resp, err := as.performSignWithRetry()
+	if err != nil {
+		state.LastResult = "failed"
+		if saveErr := as.store.Save(as.account.ID, state); saveErr != nil {
+			log.Printf("%s 保存失败状态出错: %v", as.logPrefix, saveErr)
+		}
+		return fmt.Errorf("签到失败: %w", err)
+	}
+
+	// Record result
+	as.recordSignState(resp, state, today)
+	return nil
+}
+
+// shouldThrottle checks if we should skip this attempt based on retry interval.
+func (as *AccountSigner) shouldThrottle(now time.Time, lastAttemptTime string) bool {
+	// Construct full datetime for comparison
+	today := now.Format(config.DateLayout)
+	lastAttempt, err := time.ParseInLocation(config.DateLayout+" "+config.TimeLayout,
+		today+" "+lastAttemptTime, as.cfg.Location)
+	if err != nil {
+		return false // If parse fails, don't throttle
+	}
+
+	elapsed := now.Sub(lastAttempt)
+	return elapsed < as.cfg.RetryInterval
+}
+
+// performSignWithRetry attempts sign-in with login retry logic.
+func (as *AccountSigner) performSignWithRetry() (*service.SignResponse, error) {
 	resp, err := as.service.Sign()
 	if err != nil {
-		return fmt.Errorf("签到请求失败: %w", err)
+		return nil, fmt.Errorf("签到请求失败: %w", err)
 	}
 
 	// Handle login required
 	if isLoginRequired(resp) {
 		log.Printf("%s 会话未登录或已过期，重新登录", as.logPrefix)
 		if err := as.service.Login(); err != nil {
-			return fmt.Errorf("登录失败: %w", err)
+			return nil, fmt.Errorf("登录失败: %w", err)
 		}
 		resp, err = as.service.Sign()
 		if err != nil {
-			return fmt.Errorf("登录后签到请求失败: %w", err)
+			return nil, fmt.Errorf("登录后签到请求失败: %w", err)
 		}
 	}
 
-	// Record result
-	as.recordSignState(resp, state, today)
-	return nil
+	return resp, nil
 }
 
 // isLoginRequired checks if login is needed based on response.
@@ -134,6 +183,7 @@ func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *doma
 	if resp.Code == 0 {
 		logSignSuccess(as.logPrefix, resp)
 		state.LastSignDate = today
+		state.LastResult = "success"
 		if err := as.store.Save(as.account.ID, state); err != nil {
 			log.Printf("%s 保存签到状态失败: %v", as.logPrefix, err)
 		}
@@ -142,12 +192,17 @@ func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *doma
 	if resp.Code == 1 {
 		log.Printf("%s %s", as.logPrefix, resp.Msg)
 		state.LastSignDate = today
+		state.LastResult = "success"
 		if err := as.store.Save(as.account.ID, state); err != nil {
 			log.Printf("%s 保存签到状态失败: %v", as.logPrefix, err)
 		}
 		return
 	}
 	log.Printf("%s 签到未成功: %s", as.logPrefix, resp.Msg)
+	state.LastResult = "failed"
+	if err := as.store.Save(as.account.ID, state); err != nil {
+		log.Printf("%s 保存失败状态出错: %v", as.logPrefix, err)
+	}
 }
 
 // logSignSuccess logs successful sign-in details.

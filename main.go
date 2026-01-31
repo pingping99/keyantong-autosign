@@ -48,17 +48,21 @@ func main() {
 		log.Fatal("No valid accounts available, exiting")
 	}
 
-	log.Printf("签到窗口 %s-%s，间隔 %s，时区 %s，账号数量 %d",
+	log.Printf("签到窗口 %s-%s，检查间隔 %s，重试间隔 %s，时区 %s，账号数量 %d",
 		scheduler.FormatWindow(cfg.WindowStart), scheduler.FormatWindow(cfg.WindowEnd),
-		cfg.CheckInterval, cfg.Location, len(signers))
+		cfg.CheckInterval, cfg.RetryInterval, cfg.Location, len(signers))
 
-	// Force sign on startup (ignore time window)
-	log.Printf("程序启动，立即执行登录并签到（无视时间窗口）")
-	now := time.Now()
-	for _, s := range signers {
-		if err := s.ForceSign(now); err != nil {
-			log.Printf("启动签到失败: %v", err)
+	// Force sign on startup if configured
+	if cfg.ForceSignOnStart {
+		log.Printf("程序启动，立即执行登录并签到（无视时间窗口）")
+		now := time.Now()
+		for _, s := range signers {
+			if err := s.ForceSign(now); err != nil {
+				log.Printf("启动签到失败: %v", err)
+			}
 		}
+	} else {
+		log.Printf("程序启动，已禁用强制签到，等待窗口内自动签到")
 	}
 
 	// Run initial checks

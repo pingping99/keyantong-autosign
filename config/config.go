@@ -12,23 +12,28 @@ import (
 )
 
 const (
-	DefaultWindowStart = "08:00"
-	DefaultWindowEnd   = "08:10"
-	DefaultTZ          = "Asia/Shanghai"
-	DefaultDataDir     = "./data"
-	DateLayout         = "2006-01-02"
+	DefaultWindowStart      = "08:00"
+	DefaultWindowEnd        = "09:00"
+	DefaultTZ               = "Asia/Shanghai"
+	DefaultDataDir          = "./data"
+	DateLayout              = "2006-01-02"
+	TimeLayout              = "15:04"
+	DefaultRetryInterval    = 10 * time.Minute
+	DefaultForceSignOnStart = true
 )
 
 var DefaultCheckInterval = 30 * time.Minute
 
 // AppConfig contains runtime configuration sourced from environment variables.
 type AppConfig struct {
-	Accounts      []domain.Account
-	DataDir       string
-	CheckInterval time.Duration
-	WindowStart   time.Duration
-	WindowEnd     time.Duration
-	Location      *time.Location
+	Accounts         []domain.Account
+	DataDir          string
+	CheckInterval    time.Duration
+	WindowStart      time.Duration
+	WindowEnd        time.Duration
+	Location         *time.Location
+	RetryInterval    time.Duration
+	ForceSignOnStart bool
 }
 
 // Load reads configuration from environment variables and files.
@@ -39,8 +44,10 @@ func Load() (*AppConfig, error) {
 	}
 
 	interval := parseDurationWithDefault(os.Getenv("CHECK_INTERVAL"), DefaultCheckInterval)
+	retryInterval := parseDurationWithDefault(os.Getenv("RETRY_INTERVAL"), DefaultRetryInterval)
 	windowStart := parseTimeWindow(os.Getenv("SIGN_WINDOW_START"), DefaultWindowStart)
 	windowEnd := parseTimeWindow(os.Getenv("SIGN_WINDOW_END"), DefaultWindowEnd)
+	forceSignOnStart := parseBoolWithDefault(os.Getenv("FORCE_SIGN_ON_START"), DefaultForceSignOnStart)
 
 	locName := os.Getenv("TZ")
 	if locName == "" {
@@ -75,12 +82,14 @@ func Load() (*AppConfig, error) {
 	}
 
 	return &AppConfig{
-		Accounts:      accounts,
-		DataDir:       dataDir,
-		CheckInterval: interval,
-		WindowStart:   windowStart,
-		WindowEnd:     windowEnd,
-		Location:      loc,
+		Accounts:         accounts,
+		DataDir:          dataDir,
+		CheckInterval:    interval,
+		WindowStart:      windowStart,
+		WindowEnd:        windowEnd,
+		Location:         loc,
+		RetryInterval:    retryInterval,
+		ForceSignOnStart: forceSignOnStart,
 	}, nil
 }
 
@@ -134,4 +143,20 @@ func parseTimeWindow(raw, fallback string) time.Duration {
 		parsed, _ = time.Parse("15:04", fallback)
 	}
 	return time.Duration(parsed.Hour())*time.Hour + time.Duration(parsed.Minute())*time.Minute
+}
+
+// parseBoolWithDefault parses boolean string or returns default.
+func parseBoolWithDefault(raw string, fallback bool) bool {
+	if raw == "" {
+		return fallback
+	}
+	switch raw {
+	case "true", "1", "yes", "on":
+		return true
+	case "false", "0", "no", "off":
+		return false
+	default:
+		log.Printf("invalid boolean %q, using default %t", raw, fallback)
+		return fallback
+	}
 }

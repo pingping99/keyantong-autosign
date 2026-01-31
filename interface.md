@@ -173,11 +173,23 @@ Cookie: _identity-frontend=xxx; _csrf=xxx; advanced-frontend=xxx; ...
 
 ## 长期运行与状态记录
 
-- **触发方式**: 通过环境变量配置 `ABLESCI_EMAIL`、`ABLESCI_PASSWORD`、`SIGN_WINDOW_START`、`SIGN_WINDOW_END`、`CHECK_INTERVAL` 以及 `TZ`。
-- **签到窗口**: 默认 08:00 到 08:10，仅在窗口内尝试签到。
-- **状态存储**: `/data/state.json` 记录 `last_sign_date`，避免重复签到；数据与日志目录可通过 `DATA_DIR` 环境变量覆盖。
+- **触发方式**: 通过环境变量配置 `ABLESCI_EMAIL`、`ABLESCI_PASSWORD`、`SIGN_WINDOW_START`、`SIGN_WINDOW_END`、`CHECK_INTERVAL`、`RETRY_INTERVAL`、`FORCE_SIGN_ON_START` 以及 `TZ`。
+- **签到窗口**: 默认 08:00 到 09:00，仅在窗口内尝试签到。
+- **重试间隔**: 默认 10 分钟，窗口内签到失败后的最小重试间隔，避免频繁请求。
+- **启动签到**: 默认启用（`FORCE_SIGN_ON_START=true`），程序启动时立即执行签到（无视时间窗口）；设为 `false` 则禁用。
+- **状态存储**: `/data/state_<账号hash>.json` 记录签到状态，包括：
+  - `last_sign_date`: 最后成功签到日期
+  - `last_attempt_date`: 最后尝试日期
+  - `last_attempt_time`: 最后尝试时间（HH:MM）
+  - `last_result`: 最后结果（success/failed/skip）
 - **日志**: 每次运行会追加到 `/data/sign.log`，日志同时输出到 stdout 便于容器查看。
-- **成功条件**: 只有 `SignState.last_sign_date` 不等于当天日期时才会触发展示，执行 `AutoSign` 并更新状态。
+  - **窗口外**: 仅写入文件日志，不污染控制台
+  - **窗口内**: 重要日志（签到成功/失败）输出到控制台 + 文件
+  - **节流跳过**: 仅写入文件日志
+- **签到条件**: 
+  1. 当前时间在签到窗口内
+  2. 今天尚未成功签到（`last_sign_date` ≠ 今天）
+  3. 距离上次尝试超过重试间隔（节流机制）
 
 ## Docker 运行说明
 1. 构建镜像：
@@ -269,6 +281,37 @@ compose 默认挂载 `./data` 到 `/app/data`，并复用环境变量（适配 `
 ---
 
 ## 变更历史
+
+### 2026-01-31（签到逻辑鲁棒性优化）
+- **扩展状态结构**：`domain.SignState` 新增字段：
+  - `LastAttemptDate`: 最后尝试日期
+  - `LastAttemptTime`: 最后尝试时间（HH:MM）
+  - `LastResult`: 最后结果（success/failed/skip）
+- **签到窗口扩展**：默认窗口从 08:00-08:10 扩展到 08:00-09:00，提供更长的签到时间窗口
+- **新增重试间隔机制**：
+  - 新增 `RETRY_INTERVAL` 环境变量（默认 10 分钟）
+  - 窗口内签到失败后，会在间隔时间后自动重试，避免频繁请求
+  - 节流逻辑：同一天内若距离上次尝试不足重试间隔，则跳过本次尝试（仅记录文件日志）
+- **新增启动签到开关**：
+  - 新增 `FORCE_SIGN_ON_START` 环境变量（默认 true）
+  - 设为 `false` 可禁用启动强制签到，仅在窗口内尝试签到
+- **日志策略优化**：
+  - **窗口外**: 仅写入文件日志，不输出到控制台（减少噪声）
+  - **窗口内已签到**: 仅写入文件日志
+  - **窗口内节流跳过**: 仅写入文件日志
+  - **签到成功/失败**: 输出到控制台 + 文件
+- **签到逻辑增强**：
+  - `performSignWithRetry()`: 封装带登录重试的签到流程
+  - `shouldThrottle()`: 基于时间间隔的节流判断
+  - 更细粒度的状态记录，便于诊断问题
+- **配置优化**：
+  - 新增 `config.TimeLayout` 常量（"15:04"）
+  - 新增 `parseBoolWithDefault()` 函数支持布尔值环境变量解析
+- **影响范围**：
+  - 窗口内签到失败后可自动重试，避免"窗口内未签到"的情况
+  - 日志输出更简洁，窗口外不再输出大量无用日志
+  - 支持按需禁用启动强制签到
+  - 状态文件向后兼容（新增字段为空时不影响旧逻辑）
 
 ### 2026-01-30（日志输出优化）
 - **窗口外日志静默**：当不在签到窗口时，"不在签到窗口"的日志仅写入 `sign.log` 文件，不输出到控制台
