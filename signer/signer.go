@@ -19,35 +19,30 @@ type Signer interface {
 
 // AccountSigner implements Signer using service.Service.
 type AccountSigner struct {
-	account    domain.Account
 	service    *service.Service
 	store      store.StateStore
 	cfg        *config.AppConfig
-	logPrefix  string
 	fileLogger *log.Logger
 }
 
 // NewAccountSigner creates a new account signer.
 func NewAccountSigner(
-	account domain.Account,
 	svc *service.Service,
 	store store.StateStore,
 	cfg *config.AppConfig,
 	fileLogger *log.Logger,
 ) *AccountSigner {
 	return &AccountSigner{
-		account:    account,
 		service:    svc,
 		store:      store,
 		cfg:        cfg,
-		logPrefix:  fmt.Sprintf("[%s]", account.Email),
 		fileLogger: fileLogger,
 	}
 }
 
 // ForceSign performs forced sign-in (used on startup).
 func (as *AccountSigner) ForceSign(now time.Time) error {
-	log.Printf("%s 强制执行登录与签到", as.logPrefix)
+	log.Printf("强制执行登录与签到")
 	if err := as.service.AutoSign(); err != nil {
 		return fmt.Errorf("强制签到失败: %w", err)
 	}
@@ -60,8 +55,8 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 		LastAttemptTime: nowTime,
 		LastResult:      "success",
 	}
-	if err := as.store.Save(as.account.ID, state); err != nil {
-		log.Printf("%s 保存状态失败: %v", as.logPrefix, err)
+	if err := as.store.Save(state); err != nil {
+		log.Printf("保存状态失败: %v", err)
 	}
 	return nil
 }
@@ -73,9 +68,9 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	nowTime := nowLocal.Format(config.TimeLayout)
 
 	// Load or generate dynamic window for today
-	state, err := as.store.Load(as.account.ID)
+	state, err := as.store.Load()
 	if err != nil {
-		log.Printf("%s 无法加载状态: %v", as.logPrefix, err)
+		log.Printf("无法加载状态: %v", err)
 		state = &domain.SignState{}
 	}
 
@@ -86,12 +81,12 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	// Parse window times to duration
 	windowStartDur, err := scheduler.ParseTimeWindow(windowStart)
 	if err != nil {
-		log.Printf("%s 解析窗口起始时间失败: %v", as.logPrefix, err)
+		log.Printf("解析窗口起始时间失败: %v", err)
 		return nil
 	}
 	windowEndDur, err := scheduler.ParseTimeWindow(windowEnd)
 	if err != nil {
-		log.Printf("%s 解析窗口结束时间失败: %v", as.logPrefix, err)
+		log.Printf("解析窗口结束时间失败: %v", err)
 		return nil
 	}
 
@@ -99,22 +94,21 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	inWindow := scheduler.IsWithinWindow(nowLocal, windowStartDur, windowEndDur)
 	if !inWindow {
 		// Log to file only (not to stdout) when outside sign window
-		as.fileLogger.Printf("%s 当前时间 %s 不在签到窗口 %s",
-			as.logPrefix, nowTime, windowRange)
+		as.fileLogger.Printf("当前时间 %s 不在签到窗口 %s", nowTime, windowRange)
 		return nil
 	}
 
 	// Check if already signed today
 	if state.LastSignDate == today {
-		as.fileLogger.Printf("%s 今天 (%s) 已完成签到，跳过", as.logPrefix, today)
+		as.fileLogger.Printf("今天 (%s) 已完成签到，跳过", today)
 		return nil
 	}
 
 	// Throttle: check if last attempt was too recent
 	if state.LastAttemptDate == today && state.LastAttemptTime != "" {
 		if as.shouldThrottle(nowLocal, state.LastAttemptTime) {
-			as.fileLogger.Printf("%s 距离上次尝试 (%s) 不足 %v，节流跳过",
-				as.logPrefix, state.LastAttemptTime, as.cfg.RetryInterval)
+			as.fileLogger.Printf("距离上次尝试 (%s) 不足 %v，节流跳过",
+				state.LastAttemptTime, as.cfg.RetryInterval)
 			return nil
 		}
 	}
@@ -124,12 +118,12 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	state.LastAttemptTime = nowTime
 
 	// Attempt sign
-	log.Printf("%s 签到窗口开启，开始签到... (当前时间 %s)", as.logPrefix, nowTime)
+	log.Printf("签到窗口开启，开始签到... (当前时间 %s)", nowTime)
 	resp, err := as.performSignWithRetry()
 	if err != nil {
 		state.LastResult = "failed"
-		if saveErr := as.store.Save(as.account.ID, state); saveErr != nil {
-			log.Printf("%s 保存失败状态出错: %v", as.logPrefix, saveErr)
+		if saveErr := as.store.Save(state); saveErr != nil {
+			log.Printf("保存失败状态出错: %v", saveErr)
 		}
 		return fmt.Errorf("签到失败: %w", err)
 	}
@@ -162,7 +156,7 @@ func (as *AccountSigner) performSignWithRetry() (*service.SignResponse, error) {
 
 	// Handle login required
 	if isLoginRequired(resp) {
-		log.Printf("%s 会话未登录或已过期，重新登录", as.logPrefix)
+		log.Printf("会话未登录或已过期，重新登录")
 		if err := as.service.Login(); err != nil {
 			return nil, fmt.Errorf("登录失败: %w", err)
 		}
@@ -190,31 +184,31 @@ func isLoginRequired(resp *service.SignResponse) bool {
 // recordSignState saves sign result to state.
 func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *domain.SignState, today string) {
 	if resp == nil {
-		log.Printf("%s 签到响应为空", as.logPrefix)
+		log.Printf("签到响应为空")
 		return
 	}
 	if resp.Code == 0 {
-		logSignSuccess(as.logPrefix, resp)
+		logSignSuccess(resp)
 		state.LastSignDate = today
 		state.LastResult = "success"
-		if err := as.store.Save(as.account.ID, state); err != nil {
-			log.Printf("%s 保存签到状态失败: %v", as.logPrefix, err)
+		if err := as.store.Save(state); err != nil {
+			log.Printf("保存签到状态失败: %v", err)
 		}
 		return
 	}
 	if resp.Code == 1 {
-		log.Printf("%s %s", as.logPrefix, resp.Msg)
+		log.Printf("%s", resp.Msg)
 		state.LastSignDate = today
 		state.LastResult = "success"
-		if err := as.store.Save(as.account.ID, state); err != nil {
-			log.Printf("%s 保存签到状态失败: %v", as.logPrefix, err)
+		if err := as.store.Save(state); err != nil {
+			log.Printf("保存签到状态失败: %v", err)
 		}
 		return
 	}
-	log.Printf("%s 签到未成功: %s", as.logPrefix, resp.Msg)
+	log.Printf("签到未成功: %s", resp.Msg)
 	state.LastResult = "failed"
-	if err := as.store.Save(as.account.ID, state); err != nil {
-		log.Printf("%s 保存失败状态出错: %v", as.logPrefix, err)
+	if err := as.store.Save(state); err != nil {
+		log.Printf("保存失败状态出错: %v", err)
 	}
 }
 
@@ -238,18 +232,18 @@ func (as *AccountSigner) getOrGenerateDynamicWindow(state *domain.SignState, tod
 	state.WindowDate = today
 	state.WindowStart = windowStart
 	state.WindowEnd = windowEnd
-	if err := as.store.Save(as.account.ID, state); err != nil {
-		log.Printf("%s 保存窗口状态失败: %v", as.logPrefix, err)
+	if err := as.store.Save(state); err != nil {
+		log.Printf("保存窗口状态失败: %v", err)
 	} else {
-		log.Printf("%s 今日动态签到窗口: %s - %s", as.logPrefix, windowStart, windowEnd)
+		log.Printf("今日动态签到窗口: %s - %s", windowStart, windowEnd)
 	}
 
 	return windowStart, windowEnd
 }
 
 // logSignSuccess logs successful sign-in details.
-func logSignSuccess(prefix string, resp *service.SignResponse) {
-	log.Printf("%s ✓ %s", prefix, resp.Msg)
-	log.Printf("%s   连续签到: %d 次", prefix, resp.Data.SignCount)
-	log.Printf("%s   本次获得: %d 积分", prefix, resp.Data.SignPoint)
+func logSignSuccess(resp *service.SignResponse) {
+	log.Printf("✓ %s", resp.Msg)
+	log.Printf("  连续签到: %d 次", resp.Data.SignCount)
+	log.Printf("  本次获得: %d 积分", resp.Data.SignPoint)
 }

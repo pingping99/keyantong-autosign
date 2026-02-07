@@ -22,8 +22,8 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 }
 
 // Load reads sign state from file.
-func (fs *FileStore) Load(accountID string) (*domain.SignState, error) {
-	path := filepath.Join(fs.dataDir, fmt.Sprintf("state_%s.json", accountID))
+func (fs *FileStore) Load() (*domain.SignState, error) {
+	path := filepath.Join(fs.dataDir, "state.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		// Return empty state if file doesn't exist (not an error on first run)
@@ -40,8 +40,8 @@ func (fs *FileStore) Load(accountID string) (*domain.SignState, error) {
 }
 
 // Save writes sign state to file.
-func (fs *FileStore) Save(accountID string, state *domain.SignState) error {
-	path := filepath.Join(fs.dataDir, fmt.Sprintf("state_%s.json", accountID))
+func (fs *FileStore) Save(state *domain.SignState) error {
+	path := filepath.Join(fs.dataDir, "state.json")
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
