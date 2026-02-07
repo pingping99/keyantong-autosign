@@ -7,18 +7,27 @@ services:
     container_name: ablesci-sign
     restart: unless-stopped
     environment:
+      # Required: Account credentials
       - ABLESCI_EMAIL=your@example.com
       - ABLESCI_PASSWORD=secret
-      - CHECK_INTERVAL=30m
-      - DYNAMIC_WINDOW_START=08:00
-      - DYNAMIC_WINDOW_END=18:00
-      - DYNAMIC_WINDOW_SPAN=45m
-      - TZ=Asia/Shanghai
-      - DATA_DIR=/app/data
+
+      # Optional: Smart sign-in configuration
+      - CHECK_INTERVAL=30m              # Check interval (default: 30m)
+      - DYNAMIC_WINDOW_START=08:00      # Daily sign-in range start (default: 08:00)
+      - DYNAMIC_WINDOW_END=20:00        # Daily sign-in range end (default: 20:00)
+      - RETRY_INTERVAL=10m              # Retry interval on failure (default: 10m)
+      - FORCE_SIGN_ON_START=true        # Force sign on startup (default: true)
+
+      # Optional: System configuration
+      - TZ=Asia/Shanghai                # Timezone (default: Asia/Shanghai)
+      - DATA_DIR=/app/data              # Data directory for logs and state
     volumes:
       - ./data:/app/data
     logging:
       driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD-SHELL", "pgrep signbot || exit 1"]
       interval: 10m
