@@ -61,46 +61,64 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 	return nil
 }
 
-// AttemptSign attempts to sign in during the configured window with throttling.
+// AttemptSign attempts to sign in based on smart timing with pattern avoidance.
 func (as *AccountSigner) AttemptSign(now time.Time) error {
 	nowLocal := now.In(as.cfg.Location)
 	today := nowLocal.Format(config.DateLayout)
 	nowTime := nowLocal.Format(config.TimeLayout)
 
-	// Load or generate dynamic window for today
+	// Load state
 	state, err := as.store.Load()
 	if err != nil {
 		log.Printf("无法加载状态: %v", err)
 		state = &domain.SignState{}
 	}
 
-	// Generate dynamic window if needed
-	windowStart, windowEnd := as.getOrGenerateDynamicWindow(state, today, nowLocal)
-	windowRange := fmt.Sprintf("%s-%s", windowStart, windowEnd)
-
-	// Parse window times to duration
-	windowStartDur, err := scheduler.ParseTimeWindow(windowStart)
-	if err != nil {
-		log.Printf("解析窗口起始时间失败: %v", err)
-		return nil
-	}
-	windowEndDur, err := scheduler.ParseTimeWindow(windowEnd)
-	if err != nil {
-		log.Printf("解析窗口结束时间失败: %v", err)
-		return nil
-	}
-
-	// Check if within window
-	inWindow := scheduler.IsWithinWindow(nowLocal, windowStartDur, windowEndDur)
-	if !inWindow {
-		// Log to file only (not to stdout) when outside sign window
-		as.fileLogger.Printf("当前时间 %s 不在签到窗口 %s", nowTime, windowRange)
-		return nil
-	}
-
 	// Check if already signed today
 	if state.LastSignDate == today {
 		as.fileLogger.Printf("今天 (%s) 已完成签到，跳过", today)
+		return nil
+	}
+
+	// Generate target sign time if needed (new day)
+	if state.TargetSignTime == "" || state.LastAttemptDate != today {
+		targetTime := scheduler.GenerateSmartSignTime(
+			as.cfg.DynamicWindowStart,
+			as.cfg.DynamicWindowEnd,
+			state.SignHistory,
+			today,
+		)
+		state.TargetSignTime = targetTime
+		log.Printf("今日目标签到时间: %s (基于历史模式规避算法生成)", targetTime)
+		if saveErr := as.store.Save(state); saveErr != nil {
+			log.Printf("保存目标时间失败: %v", saveErr)
+		}
+	}
+
+	// Parse target time
+	targetDur, err := scheduler.ParseTimeWindow(state.TargetSignTime)
+	if err != nil {
+		log.Printf("解析目标时间失败: %v", err)
+		return nil
+	}
+
+	// Check if we're in the sign-in window (target time ± tolerance)
+	currentDur := time.Duration(nowLocal.Hour())*time.Hour + time.Duration(nowLocal.Minute())*time.Minute
+
+	// Allow sign-in within 15 minutes before or after target time
+	tolerance := 15 * time.Minute
+	timeDiff := currentDur - targetDur
+	if timeDiff < 0 {
+		timeDiff = -timeDiff
+	}
+
+	if timeDiff > tolerance {
+		// Not yet time or too late
+		if currentDur < targetDur {
+			as.fileLogger.Printf("未到目标签到时间 %s (当前 %s)", state.TargetSignTime, nowTime)
+		} else {
+			as.fileLogger.Printf("已过目标签到时间 %s (当前 %s)", state.TargetSignTime, nowTime)
+		}
 		return nil
 	}
 
@@ -118,7 +136,7 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	state.LastAttemptTime = nowTime
 
 	// Attempt sign
-	log.Printf("签到窗口开启，开始签到... (当前时间 %s)", nowTime)
+	log.Printf("到达签到时间窗口，开始签到... (目标: %s, 当前: %s)", state.TargetSignTime, nowTime)
 	resp, err := as.performSignWithRetry()
 	if err != nil {
 		state.LastResult = "failed"
@@ -129,7 +147,7 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	}
 
 	// Record result
-	as.recordSignState(resp, state, today)
+	as.recordSignState(resp, state, today, nowTime)
 	return nil
 }
 
@@ -182,7 +200,7 @@ func isLoginRequired(resp *service.SignResponse) bool {
 }
 
 // recordSignState saves sign result to state.
-func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *domain.SignState, today string) {
+func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *domain.SignState, today, signTime string) {
 	if resp == nil {
 		log.Printf("签到响应为空")
 		return
@@ -191,6 +209,8 @@ func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *doma
 		logSignSuccess(resp)
 		state.LastSignDate = today
 		state.LastResult = "success"
+		// Update sign history
+		state.SignHistory = scheduler.UpdateSignHistory(state.SignHistory, today, signTime)
 		if err := as.store.Save(state); err != nil {
 			log.Printf("保存签到状态失败: %v", err)
 		}
@@ -200,6 +220,8 @@ func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *doma
 		log.Printf("%s", resp.Msg)
 		state.LastSignDate = today
 		state.LastResult = "success"
+		// Update sign history
+		state.SignHistory = scheduler.UpdateSignHistory(state.SignHistory, today, signTime)
 		if err := as.store.Save(state); err != nil {
 			log.Printf("保存签到状态失败: %v", err)
 		}
@@ -212,34 +234,6 @@ func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *doma
 	}
 }
 
-// getOrGenerateDynamicWindow gets or generates today's dynamic window.
-func (as *AccountSigner) getOrGenerateDynamicWindow(state *domain.SignState, today string, nowLocal time.Time) (string, string) {
-	// If window exists for today, use it
-	if state.WindowDate == today && state.WindowStart != "" && state.WindowEnd != "" {
-		return state.WindowStart, state.WindowEnd
-	}
-
-	// Generate new window for today
-	seed := nowLocal.Unix() / 86400 // Use day-based seed for consistency
-	windowStart, windowEnd := scheduler.GenerateDynamicWindow(
-		as.cfg.DynamicWindowStart,
-		as.cfg.DynamicWindowEnd,
-		as.cfg.DynamicWindowSpan,
-		seed,
-	)
-
-	// Save to state
-	state.WindowDate = today
-	state.WindowStart = windowStart
-	state.WindowEnd = windowEnd
-	if err := as.store.Save(state); err != nil {
-		log.Printf("保存窗口状态失败: %v", err)
-	} else {
-		log.Printf("今日动态签到窗口: %s - %s", windowStart, windowEnd)
-	}
-
-	return windowStart, windowEnd
-}
 
 // logSignSuccess logs successful sign-in details.
 func logSignSuccess(resp *service.SignResponse) {

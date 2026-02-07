@@ -1,37 +1,142 @@
 package scheduler
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
-	"math/rand"
+	"keyantong/domain"
+	"math"
+	mathrand "math/rand"
 	"time"
 )
 
-// GenerateDynamicWindow generates a random sign window for today.
-// Returns start and end time as HH:MM strings.
-func GenerateDynamicWindow(rangeStart, rangeEnd, windowSpan time.Duration, seed int64) (string, string) {
-	// Use seed based on date to ensure same window for same day
-	rng := rand.New(rand.NewSource(seed))
+const (
+	// HistoryWindowDays is how many days of history to consider for pattern avoidance
+	HistoryWindowDays = 14
+	// MinTimeBetweenSigns is minimum time difference from recent signs (in hours)
+	MinTimeBetweenSigns = 2.0
+)
 
-	// Calculate available range for window start
-	availableRange := rangeEnd - rangeStart - windowSpan
-	if availableRange < 0 {
-		availableRange = 0
+// GenerateSmartSignTime generates a randomized sign time that avoids historical patterns.
+// Returns target sign time as HH:MM string.
+func GenerateSmartSignTime(rangeStart, rangeEnd time.Duration, history []domain.SignRecord, today string) string {
+	// Use cryptographic random for true randomness
+	rng := newSecureRandom()
+
+	// Calculate available range
+	availableRange := rangeEnd - rangeStart
+	if availableRange <= 0 {
+		return FormatWindow(rangeStart)
 	}
 
-	// Generate random offset within available range
-	offset := time.Duration(rng.Int63n(int64(availableRange) + 1))
+	// Generate candidate times (try up to 20 times to find good time)
+	maxAttempts := 20
+	var bestTime time.Duration
+	bestScore := -1.0
 
-	// Calculate window times
-	windowStart := rangeStart + offset
-	windowEnd := windowStart + windowSpan
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Generate random time within range
+		offset := time.Duration(rng.Int63n(int64(availableRange)))
+		candidateTime := rangeStart + offset
 
-	// Ensure window doesn't exceed range end
-	if windowEnd > rangeEnd {
-		windowEnd = rangeEnd
-		windowStart = windowEnd - windowSpan
+		// Calculate score based on historical pattern avoidance
+		score := scoreSignTime(candidateTime, history)
+
+		if score > bestScore {
+			bestScore = score
+			bestTime = candidateTime
+		}
+
+		// If we found a perfect score, use it immediately
+		if score >= 1.0 {
+			break
+		}
 	}
 
-	return FormatWindow(windowStart), FormatWindow(windowEnd)
+	// Add small random jitter (0-5 minutes)
+	jitter := time.Duration(rng.Int63n(int64(5 * time.Minute)))
+	finalTime := bestTime + jitter
+
+	// Ensure final time doesn't exceed range
+	if finalTime > rangeEnd {
+		finalTime = rangeEnd - time.Duration(rng.Int63n(int64(5*time.Minute)))
+	}
+	if finalTime < rangeStart {
+		finalTime = rangeStart
+	}
+
+	return FormatWindow(finalTime)
+}
+
+// scoreSignTime calculates how good a candidate time is (higher = better).
+// Avoids times similar to recent sign-ins.
+func scoreSignTime(candidateTime time.Duration, history []domain.SignRecord) float64 {
+	if len(history) == 0 {
+		return 1.0 // No history, all times are equally good
+	}
+
+	candidateHours := candidateTime.Hours()
+	totalScore := 0.0
+
+	// Check against recent history (last 7 days weighted more)
+	for i, record := range history {
+		histTime, err := ParseTimeWindow(record.Time)
+		if err != nil {
+			continue
+		}
+
+		histHours := histTime.Hours()
+
+		// Calculate time difference in hours (handle day wrap)
+		diff := math.Abs(candidateHours - histHours)
+		if diff > 12 {
+			diff = 24 - diff // Handle wrap-around (e.g., 23:00 vs 01:00)
+		}
+
+		// Recent days have more weight
+		daysAgo := len(history) - i
+		weight := 1.0
+		if daysAgo <= 7 {
+			weight = 2.0
+		}
+
+		// Score based on time difference
+		// Further away = higher score
+		timeScore := diff / 12.0 // Normalize to 0-1 range (12 hours = perfect)
+		if diff < MinTimeBetweenSigns {
+			timeScore = 0.0 // Penalize times too close to history
+		}
+
+		totalScore += timeScore * weight
+	}
+
+	// Normalize by history size
+	return totalScore / float64(len(history))
+}
+
+// newSecureRandom creates a cryptographically secure random number generator.
+func newSecureRandom() *mathrand.Rand {
+	var seed int64
+	binary.Read(rand.Reader, binary.BigEndian, &seed)
+	return mathrand.New(mathrand.NewSource(seed))
+}
+
+// UpdateSignHistory adds a new sign record and maintains history window.
+func UpdateSignHistory(history []domain.SignRecord, date, time string) []domain.SignRecord {
+	// Add new record
+	newRecord := domain.SignRecord{
+		Date: date,
+		Time: time,
+	}
+
+	history = append(history, newRecord)
+
+	// Keep only recent records (last HistoryWindowDays days)
+	if len(history) > HistoryWindowDays {
+		history = history[len(history)-HistoryWindowDays:]
+	}
+
+	return history
 }
 
 // IsWithinWindow checks if current time is within the sign window.
