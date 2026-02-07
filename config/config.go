@@ -1,13 +1,10 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"keyantong/domain"
 	"log"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -27,7 +24,7 @@ var DefaultCheckInterval = 30 * time.Minute
 
 // AppConfig contains runtime configuration sourced from environment variables.
 type AppConfig struct {
-	Accounts           []domain.Account
+	Account            domain.Account
 	DataDir            string
 	CheckInterval      time.Duration
 	DynamicWindowStart time.Duration
@@ -38,7 +35,7 @@ type AppConfig struct {
 	ForceSignOnStart   bool
 }
 
-// Load reads configuration from environment variables and files.
+// Load reads configuration from environment variables.
 func Load() (*AppConfig, error) {
 	dataDir := os.Getenv("DATA_DIR")
 	if dataDir == "" {
@@ -62,30 +59,16 @@ func Load() (*AppConfig, error) {
 		loc = time.Local
 	}
 
-	accounts, err := loadAccounts(filepath.Join(dataDir, "accounts.json"))
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("failed to load accounts.json: %w", err)
-		}
-		email := os.Getenv("ABLESCI_EMAIL")
-		password := os.Getenv("ABLESCI_PASSWORD")
-		if email == "" || password == "" {
-			return nil, errors.New("environment variables ABLESCI_EMAIL and ABLESCI_PASSWORD must be set when accounts.json is absent")
-		}
-		accounts = []domain.Account{{Email: email, Password: password}}
+	email := os.Getenv("ABLESCI_EMAIL")
+	password := os.Getenv("ABLESCI_PASSWORD")
+	if email == "" || password == "" {
+		return nil, errors.New("environment variables ABLESCI_EMAIL and ABLESCI_PASSWORD must be set")
 	}
 
-	if len(accounts) == 0 {
-		return nil, errors.New("no accounts found in configuration")
-	}
-
-	// Set account IDs
-	for i := range accounts {
-		accounts[i].SetID()
-	}
+	account := domain.Account{Email: email, Password: password}
 
 	return &AppConfig{
-		Accounts:           accounts,
+		Account:            account,
 		DataDir:            dataDir,
 		CheckInterval:      interval,
 		DynamicWindowStart: dynamicWindowStart,
@@ -95,31 +78,6 @@ func Load() (*AppConfig, error) {
 		RetryInterval:      retryInterval,
 		ForceSignOnStart:   forceSignOnStart,
 	}, nil
-}
-
-// loadAccounts reads accounts from JSON file.
-func loadAccounts(path string) ([]domain.Account, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var payload struct {
-		Accounts []domain.Account `json:"accounts"`
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, fmt.Errorf("failed to parse %q: %w", path, err)
-	}
-
-	filtered := make([]domain.Account, 0, len(payload.Accounts))
-	for _, acc := range payload.Accounts {
-		if acc.Email == "" || acc.Password == "" {
-			continue
-		}
-		filtered = append(filtered, acc)
-	}
-
-	return filtered, nil
 }
 
 // parseDurationWithDefault parses duration string or returns default.

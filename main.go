@@ -42,62 +42,45 @@ func main() {
 		log.Fatalf("Failed to create state store: %v", err)
 	}
 
-	// Build signers for each account
-	signers := buildSigners(cfg, stateStore)
-	if len(signers) == 0 {
-		log.Fatal("No valid accounts available, exiting")
+	// Build signer for the account
+	svc, err := service.NewService(cfg.Account.Email, cfg.Account.Password)
+	if err != nil {
+		log.Fatalf("Failed to initialize service: %v", err)
 	}
 
-	log.Printf("动态签到范围 %s-%s，窗口时长 %s，检查间隔 %s，重试间隔 %s，时区 %s，账号数量 %d",
+	s := signer.NewSigner(svc, stateStore, cfg, fileLogger)
+
+	log.Printf("动态签到范围 %s-%s，窗口时长 %s，检查间隔 %s，重试间隔 %s，时区 %s",
 		scheduler.FormatWindow(cfg.DynamicWindowStart), scheduler.FormatWindow(cfg.DynamicWindowEnd),
-		cfg.DynamicWindowSpan, cfg.CheckInterval, cfg.RetryInterval, cfg.Location, len(signers))
+		cfg.DynamicWindowSpan, cfg.CheckInterval, cfg.RetryInterval, cfg.Location)
 
 	// Force sign on startup if configured
 	if cfg.ForceSignOnStart {
 		log.Printf("程序启动，立即执行登录并签到（无视时间窗口）")
 		now := time.Now()
-		for _, s := range signers {
-			if err := s.ForceSign(now); err != nil {
-				log.Printf("启动签到失败: %v", err)
-			}
+		if err := s.ForceSign(now); err != nil {
+			log.Printf("启动签到失败: %v", err)
 		}
 	} else {
 		log.Printf("程序启动，已禁用强制签到，等待窗口内自动签到")
 	}
 
-	// Run initial checks
-	runChecks(signers)
+	// Run initial check
+	runCheck(s)
 
 	// Start periodic checks
 	ticker := time.NewTicker(cfg.CheckInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		runChecks(signers)
+		runCheck(s)
 	}
 }
 
-// buildSigners creates signer instances for each account.
-func buildSigners(cfg *config.AppConfig, store store.StateStore) []signer.Signer {
-	signers := make([]signer.Signer, 0, len(cfg.Accounts))
-	for _, account := range cfg.Accounts {
-		svc, err := service.NewService(account.Email, account.Password)
-		if err != nil {
-			log.Printf("[%s] 初始化 service 失败: %v", account.Email, err)
-			continue
-		}
-		s := signer.NewAccountSigner(account, svc, store, cfg, fileLogger)
-		signers = append(signers, s)
-	}
-	return signers
-}
-
-// runChecks executes sign attempts for all signers.
-func runChecks(signers []signer.Signer) {
+// runCheck executes sign attempt.
+func runCheck(s signer.Signer) {
 	now := time.Now()
-	for _, s := range signers {
-		if err := s.AttemptSign(now); err != nil {
-			log.Printf("签到失败: %v", err)
-		}
+	if err := s.AttemptSign(now); err != nil {
+		log.Printf("签到失败: %v", err)
 	}
 }

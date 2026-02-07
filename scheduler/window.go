@@ -34,6 +34,23 @@ func GenerateDynamicWindow(rangeStart, rangeEnd, windowSpan time.Duration, seed 
 	return FormatWindow(windowStart), FormatWindow(windowEnd)
 }
 
+// GenerateRandomDelay generates a random delay within the sign window to avoid
+// signing at predictable times. Uses current timestamp for true randomness.
+func GenerateRandomDelay(windowSpan time.Duration) time.Duration {
+	// Use current nanosecond timestamp for maximum randomness
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	
+	// Generate random delay up to the window span
+	// This ensures we sign at different times within the window
+	maxDelay := int64(windowSpan)
+	if maxDelay <= 0 {
+		return 0
+	}
+	
+	randomDelay := time.Duration(rng.Int63n(maxDelay))
+	return randomDelay
+}
+
 // IsWithinWindow checks if current time is within the sign window.
 func IsWithinWindow(now time.Time, start, end time.Duration) bool {
 	current := time.Duration(now.Hour())*time.Hour + time.Duration(now.Minute())*time.Minute

@@ -9,4 +9,5 @@ type SignState struct {
 	WindowDate      string `json:"window_date"`       // Dynamic window date (YYYY-MM-DD)
 	WindowStart     string `json:"window_start"`      // Dynamic window start time (HH:MM)
 	WindowEnd       string `json:"window_end"`        // Dynamic window end time (HH:MM)
+	ScheduledTime   string `json:"scheduled_time"`    // Scheduled random sign time within window (HH:MM)
 }
