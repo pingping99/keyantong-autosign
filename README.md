@@ -10,7 +10,7 @@
 - ✅ Cookie 会话管理
 - ✅ 详细的签到结果显示
 - ✅ 首次使用自动登录签到
-- ✅ 多账号支持
+- ✅ 动态签到时间（避免固定时间被检测）
 - ✅ 登录状态检查与自动重登录
 
 ## 项目结构
@@ -19,12 +19,16 @@
 keyantong/
 ├── main.go              # 主程序入口
 ├── go.mod               # Go 模块依赖
-├── config.yaml          # 配置文件（需自行创建）
-├── config.yaml.example  # 配置文件示例
+├── config/
+│   └── config.go        # 配置加载
 ├── client/
 │   └── client.go        # HTTP 客户端封装
 ├── service/
 │   └── sign.go          # 登录和签到业务逻辑
+├── signer/
+│   └── signer.go        # 签到调度逻辑
+├── scheduler/
+│   └── window.go        # 动态窗口生成
 └── interface.md         # 接口文档
 ```
 
@@ -38,32 +42,7 @@ go mod tidy
 
 ### 2. 配置账号
 
-#### 方式一：使用 accounts.json（推荐，支持多账号）
-
-复制配置文件模板并填写您的账号信息：
-
-```bash
-cp data/accounts.json.example data/accounts.json
-```
-
-编辑 `data/accounts.json`：
-
-```json
-{
-  "accounts": [
-    {
-      "email": "your_email1@example.com",
-      "password": "your_password1"
-    },
-    {
-      "email": "your_email2@example.com",
-      "password": "your_password2"
-    }
-  ]
-}
-```
-
-#### 方式二：使用环境变量（单账号）
+使用环境变量设置账号信息：
 
 ```bash
 export ABLESCI_EMAIL="your_email@example.com"
@@ -99,12 +78,13 @@ go build -o ablesci-sign.exe
 
 ## 注意事项
 
-- 请妥善保管 `data/accounts.json` 文件，不要提交到版本控制系统
+- 请妥善保管账号信息，不要将环境变量或配置文件提交到版本控制系统
 - 建议配合定时任务（如 cron、Windows 任务计划程序）实现每日自动签到
 - 本脚本仅供学习交流使用
-- 首次运行时会自动执行登录与签到（基于日志文件是否为空判定）
-- 每个账号的签到状态独立保存在 `data/state_<账号hash>.json`
+- 首次运行时会自动执行登录与签到
+- 签到状态保存在 `data/state.json`
 - 程序运行时会自动检查登录状态，如果会话失效会自动重新登录
+- 程序采用动态签到时间，每天在配置的时间窗口内随机选择一个时间签到，避免固定时间被检测
 
 ## 定时任务配置
 
@@ -137,8 +117,9 @@ cd keyantong-autosign
 ABLESCI_EMAIL=you@example.com
 ABLESCI_PASSWORD=secret
 CHECK_INTERVAL=30m           # 每次签到检查间隔
-SIGN_WINDOW_START=08:00
-SIGN_WINDOW_END=08:10
+DYNAMIC_WINDOW_START=08:00   # 签到窗口起始时间
+DYNAMIC_WINDOW_END=18:00     # 签到窗口结束时间
+DYNAMIC_WINDOW_SPAN=45m      # 签到窗口时长
 TZ=Asia/Shanghai
 DATA_DIR=/app/data           # 容器内部日志/状态目录
 ```
@@ -164,8 +145,8 @@ docker compose down
 
 ### 环境变量说明
 
-- `ABLESCI_EMAIL`：AbleSci 登录邮箱（当 accounts.json 不存在时必填，单账号模式）
-- `ABLESCI_PASSWORD`：AbleSci 登录密码（当 accounts.json 不存在时必填，单账号模式）
+- `ABLESCI_EMAIL`：AbleSci 登录邮箱（必填）
+- `ABLESCI_PASSWORD`：AbleSci 登录密码（必填）
 - `CHECK_INTERVAL`：签到检查频率，支持 Go `time.Duration` 表达式（默认 `30m`）
 - `DYNAMIC_WINDOW_START`：动态签到窗口的起始时间（格式 `HH:MM`，默认 `08:00`）
 - `DYNAMIC_WINDOW_END`：动态签到窗口的结束时间（格式 `HH:MM`，默认 `18:00`）
@@ -178,34 +159,13 @@ docker compose down
 - 窗口时长由 `DYNAMIC_WINDOW_SPAN` 指定（例如 45 分钟）
 - 每天的窗口位置随机，避免固定时间签到被检测
 - 同一天内窗口保持不变（持久化到状态文件）
+- 在窗口内，系统会随机选择一个具体时间进行签到，进一步增强随机性
 
-### 多账号配置
-
-在 `DATA_DIR` 目录下创建 `accounts.json` 文件（参考 `data/accounts.json.example`）：
-
-```json
-{
-  "accounts": [
-    {
-      "email": "account1@example.com",
-      "password": "password1"
-    },
-    {
-      "email": "account2@example.com",
-      "password": "password2"
-    }
-  ]
-}
-```
-
-- 程序优先读取 `accounts.json`，如不存在则回退到环境变量（单账号模式）
-- 每个账号的状态独立管理，互不影响
-- 首次运行时，所有账号都会立即执行一次登录和签到
+## 依赖
 
 - Go 1.21+
 - net/http - HTTP 请求
 - cookiejar - Cookie 管理
-- gopkg.in/yaml.v3 - YAML 配置解析
 
 ## 许可证
 

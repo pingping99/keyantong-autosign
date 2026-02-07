@@ -1,6 +1,10 @@
 # Configuration file with credentials
 config.yaml
 
+# Data files
+data/*.json
+data/*.log
+
 # Binary files
 *.exe
 ablesci-sign
