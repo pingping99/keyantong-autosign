@@ -51,9 +51,14 @@ func GenerateRandomDelay(windowSpan time.Duration) time.Duration {
 	return randomDelay
 }
 
+// GetCurrentDuration returns the duration since midnight for the given time.
+func GetCurrentDuration(now time.Time) time.Duration {
+	return time.Duration(now.Hour())*time.Hour + time.Duration(now.Minute())*time.Minute
+}
+
 // IsWithinWindow checks if current time is within the sign window.
 func IsWithinWindow(now time.Time, start, end time.Duration) bool {
-	current := time.Duration(now.Hour())*time.Hour + time.Duration(now.Minute())*time.Minute
+	current := GetCurrentDuration(now)
 	if start <= end {
 		return current >= start && current <= end
 	}

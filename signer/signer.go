@@ -111,7 +111,7 @@ log.Printf("解析计划签到时间失败: %v", err)
 return nil
 }
 
-currentDur := time.Duration(nowLocal.Hour())*time.Hour + time.Duration(nowLocal.Minute())*time.Minute
+currentDur := scheduler.GetCurrentDuration(nowLocal)
 if currentDur < scheduledTimeDur {
 // Haven't reached scheduled time yet
 s.fileLogger.Printf("当前时间 %s，等待计划签到时间 %s", nowTime, scheduledTime)
@@ -243,8 +243,16 @@ seed,
 )
 
 // Generate random scheduled time within the window
-windowStartDur, _ := scheduler.ParseTimeWindow(windowStart)
-windowEndDur, _ := scheduler.ParseTimeWindow(windowEnd)
+windowStartDur, err := scheduler.ParseTimeWindow(windowStart)
+if err != nil {
+log.Printf("解析窗口起始时间失败: %v", err)
+return windowStart, windowEnd, windowStart // Fallback to window start
+}
+windowEndDur, err := scheduler.ParseTimeWindow(windowEnd)
+if err != nil {
+log.Printf("解析窗口结束时间失败: %v", err)
+return windowStart, windowEnd, windowStart // Fallback to window start
+}
 windowSpan := windowEndDur - windowStartDur
 randomDelay := scheduler.GenerateRandomDelay(windowSpan)
 scheduledTimeDur := windowStartDur + randomDelay
