@@ -43,21 +43,30 @@ func NewAccountSigner(
 // ForceSign performs forced sign-in (used on startup).
 func (as *AccountSigner) ForceSign(now time.Time) error {
 	log.Printf("强制执行登录与签到")
-	if err := as.service.AutoSign(); err != nil {
+	state, err := as.store.Load()
+	if err != nil {
+		log.Printf("无法加载状态: %v", err)
+		state = &domain.SignState{}
+	}
+
+	nowLocal := now.In(as.cfg.Location)
+	today := nowLocal.Format(config.DateLayout)
+	nowTime := nowLocal.Format(config.TimeLayout)
+
+	state.LastAttemptDate = today
+	state.LastAttemptTime = nowTime
+	state.TargetSignTime = nowTime
+
+	resp, err := as.performSignWithRetry()
+	if err != nil {
+		state.LastResult = "failed"
+		if saveErr := as.store.Save(state); saveErr != nil {
+			log.Printf("保存失败状态出错: %v", saveErr)
+		}
 		return fmt.Errorf("强制签到失败: %w", err)
 	}
 
-	today := now.In(as.cfg.Location).Format(config.DateLayout)
-	nowTime := now.In(as.cfg.Location).Format(config.TimeLayout)
-	state := &domain.SignState{
-		LastSignDate:    today,
-		LastAttemptDate: today,
-		LastAttemptTime: nowTime,
-		LastResult:      "success",
-	}
-	if err := as.store.Save(state); err != nil {
-		log.Printf("保存状态失败: %v", err)
-	}
+	as.recordSignState(resp, state, today, nowTime)
 	return nil
 }
 
