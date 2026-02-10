@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"keyantong/client"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -152,7 +153,10 @@ func (s *Service) Login() error {
 
 	// Check if login successful
 	if code, ok := result["code"].(float64); ok && code != 0 {
-		msg := result["msg"].(string)
+		msg, _ := result["msg"].(string)
+		if msg == "" {
+			msg = fmt.Sprintf("unknown error (code: %.0f)", code)
+		}
 		return fmt.Errorf("login failed: %s", msg)
 	}
 
@@ -197,14 +201,14 @@ func (s *Service) Sign() (*SignResponse, error) {
 // AutoSign performs automatic sign-in process
 func (s *Service) AutoSign() error {
 	// Login first
-	fmt.Println("正在登录...")
+	log.Printf("正在登录...")
 	if err := s.Login(); err != nil {
 		return fmt.Errorf("登录失败: %w", err)
 	}
-	fmt.Println("✓ 登录成功")
+	log.Printf("✓ 登录成功")
 
 	// Perform sign-in
-	fmt.Println("正在签到...")
+	log.Printf("正在签到...")
 	signResp, err := s.Sign()
 	if err != nil {
 		return fmt.Errorf("签到失败: %w", err)
@@ -212,9 +216,11 @@ func (s *Service) AutoSign() error {
 
 	// Display result
 	if signResp.Code == 0 {
-		fmt.Printf("✓ %s\n", signResp.Msg)
-		fmt.Printf("  连续签到: %d 次\n", signResp.Data.SignCount)
-		fmt.Printf("  本次获得: %d 积分\n", signResp.Data.SignPoint)
+		log.Printf("✓ %s", signResp.Msg)
+		log.Printf("  连续签到: %d 次", signResp.Data.SignCount)
+		log.Printf("  本次获得: %d 积分", signResp.Data.SignPoint)
+	} else if signResp.Code == 1 {
+		log.Printf("✓ %s", signResp.Msg)
 	} else {
 		return fmt.Errorf("签到失败: %s", signResp.Msg)
 	}

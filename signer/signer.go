@@ -43,18 +43,25 @@ func NewAccountSigner(
 // ForceSign performs forced sign-in (used on startup).
 func (as *AccountSigner) ForceSign(now time.Time) error {
 	log.Printf("强制执行登录与签到")
+
+	// Load existing state to preserve sign history
+	state, err := as.store.Load()
+	if err != nil {
+		log.Printf("无法加载状态，使用空状态: %v", err)
+		state = &domain.SignState{}
+	}
+
 	if err := as.service.AutoSign(); err != nil {
 		return fmt.Errorf("强制签到失败: %w", err)
 	}
 
 	today := now.In(as.cfg.Location).Format(config.DateLayout)
 	nowTime := now.In(as.cfg.Location).Format(config.TimeLayout)
-	state := &domain.SignState{
-		LastSignDate:    today,
-		LastAttemptDate: today,
-		LastAttemptTime: nowTime,
-		LastResult:      "success",
-	}
+	state.LastSignDate = today
+	state.LastAttemptDate = today
+	state.LastAttemptTime = nowTime
+	state.LastResult = "success"
+	state.SignHistory = scheduler.UpdateSignHistory(state.SignHistory, today, nowTime)
 	if err := as.store.Save(state); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}
@@ -81,13 +88,14 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	}
 
 	// Generate target sign time if needed (new day)
-	if state.TargetSignTime == "" || state.LastAttemptDate != today {
+	if state.TargetSignTime == "" || state.TargetSignDate != today {
 		targetTime := scheduler.GenerateSmartSignTime(
 			as.cfg.DynamicWindowStart,
 			as.cfg.DynamicWindowEnd,
 			state.SignHistory,
 			today,
 		)
+		state.TargetSignDate = today
 		state.TargetSignTime = targetTime
 		log.Printf("今日目标签到时间: %s (基于历史模式规避算法生成)", targetTime)
 		if saveErr := as.store.Save(state); saveErr != nil {
@@ -205,32 +213,27 @@ func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *doma
 		log.Printf("签到响应为空")
 		return
 	}
-	if resp.Code == 0 {
+
+	switch resp.Code {
+	case 0:
+		// Sign-in succeeded
 		logSignSuccess(resp)
 		state.LastSignDate = today
 		state.LastResult = "success"
-		// Update sign history
 		state.SignHistory = scheduler.UpdateSignHistory(state.SignHistory, today, signTime)
-		if err := as.store.Save(state); err != nil {
-			log.Printf("保存签到状态失败: %v", err)
-		}
-		return
-	}
-	if resp.Code == 1 {
+	case 1:
+		// Already signed today
 		log.Printf("%s", resp.Msg)
 		state.LastSignDate = today
 		state.LastResult = "success"
-		// Update sign history
 		state.SignHistory = scheduler.UpdateSignHistory(state.SignHistory, today, signTime)
-		if err := as.store.Save(state); err != nil {
-			log.Printf("保存签到状态失败: %v", err)
-		}
-		return
+	default:
+		log.Printf("签到未成功: %s", resp.Msg)
+		state.LastResult = "failed"
 	}
-	log.Printf("签到未成功: %s", resp.Msg)
-	state.LastResult = "failed"
+
 	if err := as.store.Save(state); err != nil {
-		log.Printf("保存失败状态出错: %v", err)
+		log.Printf("保存签到状态失败: %v", err)
 	}
 }
 
