@@ -19,6 +19,13 @@ const (
 	LoginPage = BaseURL + "/site/login"
 )
 
+// Pre-compiled regexps for CSRF token extraction
+var (
+	reCSRFMeta     = regexp.MustCompile(`<meta[^>]+name="csrf-token"[^>]+content="([^"]+)"`)
+	reCSRFInput    = regexp.MustCompile(`<input[^>]+name="_csrf"[^>]+value="([^"]+)"`)
+	reCSRFFallback = regexp.MustCompile(`<input[^>]+id="g_csrf_token"[^>]+value="([^"]+)"`)
+)
+
 // SignResponse represents the sign-in response
 type SignResponse struct {
 	Code int    `json:"code"`
@@ -29,6 +36,12 @@ type SignResponse struct {
 		TodayHistory string `json:"today_history"`
 		IsAlert      int    `json:"is_alert"`
 	} `json:"data"`
+}
+
+// LoginResponse represents the login response
+type LoginResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
 }
 
 // Service handles sign-in operations
@@ -76,23 +89,15 @@ func (s *Service) GetCSRFToken() (string, error) {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
-	// Extract CSRF token from HTML
-	// Try meta csrf
-	reMeta := regexp.MustCompile(`<meta[^>]+name="csrf-token"[^>]+content="([^"]+)"`)
-	if metaMatch := reMeta.FindSubmatch(body); len(metaMatch) >= 2 {
-		return string(metaMatch[1]), nil
+	// Extract CSRF token from HTML using pre-compiled regexps
+	if match := reCSRFMeta.FindSubmatch(body); len(match) >= 2 {
+		return string(match[1]), nil
 	}
-
-	// Fall back to input hidden tokens (allow additional attributes)
-	reInput := regexp.MustCompile(`<input[^>]+name="_csrf"[^>]+value="([^"]+)"`)
-	if inputMatch := reInput.FindSubmatch(body); len(inputMatch) >= 2 {
-		return string(inputMatch[1]), nil
+	if match := reCSRFInput.FindSubmatch(body); len(match) >= 2 {
+		return string(match[1]), nil
 	}
-
-	// Finally check fallback token fields
-	reFallback := regexp.MustCompile(`<input[^>]+id="g_csrf_token"[^>]+value="([^"]+)"`)
-	if fallback := reFallback.FindSubmatch(body); len(fallback) >= 2 {
-		return string(fallback[1]), nil
+	if match := reCSRFFallback.FindSubmatch(body); len(match) >= 2 {
+		return string(match[1]), nil
 	}
 
 	return "", fmt.Errorf("CSRF token not found in page")
@@ -140,22 +145,28 @@ func (s *Service) Login() error {
 		return fmt.Errorf("failed to read login response: %w", err)
 	}
 
-	// Check login result
+	// Check HTTP status
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("login failed with status code: %d, body: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("login failed with status %d: %s", resp.StatusCode, truncateBody(body))
+	}
+
+	// Check Content-Type before parsing JSON
+	ct := resp.Header.Get("Content-Type")
+	if ct != "" && !strings.Contains(ct, "json") {
+		return fmt.Errorf("login returned unexpected content type %q: %s", ct, truncateBody(body))
 	}
 
 	// Parse JSON response
-	var result map[string]interface{}
+	var result LoginResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("failed to parse login response: %w", err)
+		return fmt.Errorf("failed to parse login response: %w, body: %s", err, truncateBody(body))
 	}
 
 	// Check if login successful
-	if code, ok := result["code"].(float64); ok && code != 0 {
-		msg, _ := result["msg"].(string)
+	if result.Code != 0 {
+		msg := result.Msg
 		if msg == "" {
-			msg = fmt.Sprintf("unknown error (code: %.0f)", code)
+			msg = fmt.Sprintf("unknown error (code: %d)", result.Code)
 		}
 		return fmt.Errorf("login failed: %s", msg)
 	}
@@ -189,10 +200,21 @@ func (s *Service) Sign() (*SignResponse, error) {
 		return nil, fmt.Errorf("failed to read sign response: %w", err)
 	}
 
+	// Check HTTP status
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("sign request failed with status %d: %s", resp.StatusCode, truncateBody(body))
+	}
+
+	// Check Content-Type before parsing JSON
+	ct := resp.Header.Get("Content-Type")
+	if ct != "" && !strings.Contains(ct, "json") {
+		return nil, fmt.Errorf("sign returned unexpected content type %q: %s", ct, truncateBody(body))
+	}
+
 	// Parse response
 	var signResp SignResponse
 	if err := json.Unmarshal(body, &signResp); err != nil {
-		return nil, fmt.Errorf("failed to parse sign response: %w", err)
+		return nil, fmt.Errorf("failed to parse sign response: %w, body: %s", err, truncateBody(body))
 	}
 
 	return &signResp, nil
@@ -226,4 +248,12 @@ func (s *Service) AutoSign() error {
 	}
 
 	return nil
+}
+
+// truncateBody returns the first 200 bytes of body for error messages.
+func truncateBody(body []byte) string {
+	if len(body) > 200 {
+		return string(body[:200]) + "..."
+	}
+	return string(body)
 }

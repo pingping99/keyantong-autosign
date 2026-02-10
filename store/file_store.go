@@ -39,12 +39,20 @@ func (fs *FileStore) Load() (*domain.SignState, error) {
 	return &state, nil
 }
 
-// Save writes sign state to file.
+// Save writes sign state to file atomically (write to temp, then rename).
 func (fs *FileStore) Save(state *domain.SignState) error {
 	path := filepath.Join(fs.dataDir, "state.json")
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write temp state file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("failed to rename temp state file: %w", err)
+	}
+	return nil
 }

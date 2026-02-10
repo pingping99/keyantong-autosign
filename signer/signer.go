@@ -121,13 +121,17 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	}
 
 	if timeDiff > tolerance {
-		// Not yet time or too late
 		if currentDur < targetDur {
 			as.fileLogger.Printf("未到目标签到时间 %s (当前 %s)", state.TargetSignTime, nowTime)
-		} else {
-			as.fileLogger.Printf("已过目标签到时间 %s (当前 %s)", state.TargetSignTime, nowTime)
+			return nil
 		}
-		return nil
+		// Window missed — fallback: sign immediately if still within configured range
+		if currentDur <= as.cfg.DynamicWindowEnd {
+			log.Printf("已错过目标时间 %s，在允许范围内执行补签 (当前 %s)", state.TargetSignTime, nowTime)
+		} else {
+			as.fileLogger.Printf("已过目标签到时间 %s 且超出允许范围 (当前 %s)", state.TargetSignTime, nowTime)
+			return nil
+		}
 	}
 
 	// Throttle: check if last attempt was too recent
@@ -189,6 +193,9 @@ func (as *AccountSigner) performSignWithRetry() (*service.SignResponse, error) {
 		resp, err = as.service.Sign()
 		if err != nil {
 			return nil, fmt.Errorf("登录后签到请求失败: %w", err)
+		}
+		if isLoginRequired(resp) {
+			return nil, fmt.Errorf("重新登录后仍无法签到，请检查账号凭证")
 		}
 	}
 

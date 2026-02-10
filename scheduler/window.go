@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"keyantong/config"
 	"keyantong/domain"
 	"math"
 	mathrand "math/rand"
@@ -40,7 +41,7 @@ func GenerateSmartSignTime(rangeStart, rangeEnd time.Duration, history []domain.
 		candidateTime := rangeStart + offset
 
 		// Calculate score based on historical pattern avoidance
-		score := scoreSignTime(candidateTime, history)
+		score := scoreSignTime(candidateTime, history, today)
 
 		if score > bestScore {
 			bestScore = score
@@ -70,16 +71,17 @@ func GenerateSmartSignTime(rangeStart, rangeEnd time.Duration, history []domain.
 
 // scoreSignTime calculates how good a candidate time is (higher = better).
 // Avoids times similar to recent sign-ins.
-func scoreSignTime(candidateTime time.Duration, history []domain.SignRecord) float64 {
+func scoreSignTime(candidateTime time.Duration, history []domain.SignRecord, today string) float64 {
 	if len(history) == 0 {
 		return 1.0 // No history, all times are equally good
 	}
 
+	todayDate, todayErr := time.Parse(config.DateLayout, today)
 	candidateHours := candidateTime.Hours()
 	totalScore := 0.0
 
 	// Check against recent history (last 7 days weighted more)
-	for i, record := range history {
+	for _, record := range history {
 		histTime, err := ParseTimeWindow(record.Time)
 		if err != nil {
 			continue
@@ -93,11 +95,16 @@ func scoreSignTime(candidateTime time.Duration, history []domain.SignRecord) flo
 			diff = 24 - diff // Handle wrap-around (e.g., 23:00 vs 01:00)
 		}
 
-		// Recent days have more weight
-		daysAgo := len(history) - i
+		// Calculate actual days ago from record date
 		weight := 1.0
-		if daysAgo <= 7 {
-			weight = 2.0
+		if todayErr == nil {
+			recordDate, err := time.Parse(config.DateLayout, record.Date)
+			if err == nil {
+				daysAgo := int(todayDate.Sub(recordDate).Hours() / 24)
+				if daysAgo <= 7 {
+					weight = 2.0
+				}
+			}
 		}
 
 		// Score based on time difference
