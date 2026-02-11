@@ -62,6 +62,10 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 	state.LastAttemptTime = nowTime
 	state.LastResult = "success"
 	state.SignHistory = scheduler.UpdateSignHistory(state.SignHistory, today, nowTime)
+
+	// Log next sign info after successful force sign
+	as.logNextSignInfo(state)
+
 	if err := as.store.Save(state); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}
@@ -228,12 +232,14 @@ func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *doma
 		state.LastSignDate = today
 		state.LastResult = "success"
 		state.SignHistory = scheduler.UpdateSignHistory(state.SignHistory, today, signTime)
+		as.logNextSignInfo(state)
 	case 1:
 		// Already signed today
 		log.Printf("%s", resp.Msg)
 		state.LastSignDate = today
 		state.LastResult = "success"
 		state.SignHistory = scheduler.UpdateSignHistory(state.SignHistory, today, signTime)
+		as.logNextSignInfo(state)
 	default:
 		log.Printf("签到未成功: %s", resp.Msg)
 		state.LastResult = "failed"
@@ -250,4 +256,30 @@ func logSignSuccess(resp *service.SignResponse) {
 	log.Printf("✓ %s", resp.Msg)
 	log.Printf("  连续签到: %d 次", resp.Data.SignCount)
 	log.Printf("  本次获得: %d 积分", resp.Data.SignPoint)
+}
+
+// logNextSignInfo logs next sign-in window and estimated time.
+func (as *AccountSigner) logNextSignInfo(state *domain.SignState) {
+	now := time.Now().In(as.cfg.Location)
+	tomorrow := now.AddDate(0, 0, 1)
+	tomorrowDate := tomorrow.Format(config.DateLayout)
+
+	// Generate tomorrow's target sign time
+	nextTargetTime := scheduler.GenerateSmartSignTime(
+		as.cfg.DynamicWindowStart,
+		as.cfg.DynamicWindowEnd,
+		state.SignHistory,
+		tomorrowDate,
+	)
+
+	// Format window range
+	windowStart := scheduler.FormatWindow(as.cfg.DynamicWindowStart)
+	windowEnd := scheduler.FormatWindow(as.cfg.DynamicWindowEnd)
+
+	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	log.Printf("下一次签到信息：")
+	log.Printf("  签到日期: %s", tomorrowDate)
+	log.Printf("  签到窗口: %s - %s", windowStart, windowEnd)
+	log.Printf("  预计时间: %s", nextTargetTime)
+	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 }

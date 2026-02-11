@@ -150,16 +150,11 @@ func (s *Service) Login() error {
 		return fmt.Errorf("login failed with status %d: %s", resp.StatusCode, truncateBody(body))
 	}
 
-	// Check Content-Type before parsing JSON
-	ct := resp.Header.Get("Content-Type")
-	if ct != "" && !strings.Contains(ct, "json") {
-		return fmt.Errorf("login returned unexpected content type %q: %s", ct, truncateBody(body))
-	}
-
-	// Parse JSON response
+	// Parse JSON response (skip Content-Type check as server may return incorrect headers)
 	var result LoginResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("failed to parse login response: %w, body: %s", err, truncateBody(body))
+		ct := resp.Header.Get("Content-Type")
+		return fmt.Errorf("failed to parse login response (Content-Type: %q): %w, body: %s", ct, err, truncateBody(body))
 	}
 
 	// Check if login successful
@@ -205,16 +200,11 @@ func (s *Service) Sign() (*SignResponse, error) {
 		return nil, fmt.Errorf("sign request failed with status %d: %s", resp.StatusCode, truncateBody(body))
 	}
 
-	// Check Content-Type before parsing JSON
-	ct := resp.Header.Get("Content-Type")
-	if ct != "" && !strings.Contains(ct, "json") {
-		return nil, fmt.Errorf("sign returned unexpected content type %q: %s", ct, truncateBody(body))
-	}
-
-	// Parse response
+	// Parse response (skip Content-Type check as server may return incorrect headers)
 	var signResp SignResponse
 	if err := json.Unmarshal(body, &signResp); err != nil {
-		return nil, fmt.Errorf("failed to parse sign response: %w, body: %s", err, truncateBody(body))
+		ct := resp.Header.Get("Content-Type")
+		return nil, fmt.Errorf("failed to parse sign response (Content-Type: %q): %w, body: %s", ct, err, truncateBody(body))
 	}
 
 	return &signResp, nil
