@@ -13,7 +13,7 @@ const (
 	DefaultTZ                 = "Asia/Shanghai"
 	DefaultDataDir            = "./data"
 	DateLayout                = "2006-01-02"
-	TimeLayout                = "15:04"
+	TimeLayout                = "15:04:05"
 	DefaultRetryInterval      = 10 * time.Minute
 	DefaultForceSignOnStart   = true
 )

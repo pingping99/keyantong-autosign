@@ -19,7 +19,7 @@ const (
 )
 
 // GenerateSmartSignTime generates a randomized sign time that avoids historical patterns.
-// Returns target sign time as HH:MM string.
+// Returns target sign time as HH:MM:SS string.
 func GenerateSmartSignTime(rangeStart, rangeEnd time.Duration, history []domain.SignRecord, today string) string {
 	// Use cryptographic random for true randomness
 	rng := newSecureRandom()
@@ -27,7 +27,7 @@ func GenerateSmartSignTime(rangeStart, rangeEnd time.Duration, history []domain.
 	// Calculate available range
 	availableRange := rangeEnd - rangeStart
 	if availableRange <= 0 {
-		return FormatWindow(rangeStart)
+		return FormatWindowWithSeconds(rangeStart, rng.Intn(60))
 	}
 
 	// Generate candidate times (try up to 20 times to find good time)
@@ -66,7 +66,10 @@ func GenerateSmartSignTime(rangeStart, rangeEnd time.Duration, history []domain.
 		finalTime = rangeStart
 	}
 
-	return FormatWindow(finalTime)
+	// Generate random seconds (0-59) to ensure variety
+	randomSeconds := rng.Intn(60)
+
+	return FormatWindowWithSeconds(finalTime, randomSeconds)
 }
 
 // scoreSignTime calculates how good a candidate time is (higher = better).
@@ -78,6 +81,7 @@ func scoreSignTime(candidateTime time.Duration, history []domain.SignRecord, tod
 
 	todayDate, todayErr := time.Parse(config.DateLayout, today)
 	candidateHours := candidateTime.Hours()
+	candidateMinutes := (candidateTime.Minutes() - candidateHours*60)
 	totalScore := 0.0
 
 	// Check against recent history (last 7 days weighted more)
@@ -88,12 +92,17 @@ func scoreSignTime(candidateTime time.Duration, history []domain.SignRecord, tod
 		}
 
 		histHours := histTime.Hours()
+		histMinutes := (histTime.Minutes() - histHours*60)
 
 		// Calculate time difference in hours (handle day wrap)
-		diff := math.Abs(candidateHours - histHours)
-		if diff > 12 {
-			diff = 24 - diff // Handle wrap-around (e.g., 23:00 vs 01:00)
+		hourDiff := math.Abs(candidateHours - histHours)
+		if hourDiff > 12 {
+			hourDiff = 24 - hourDiff // Handle wrap-around (e.g., 23:00 vs 01:00)
 		}
+
+		// Also consider minute difference for more precision
+		minuteDiff := math.Abs(candidateMinutes - histMinutes)
+		totalDiff := hourDiff + (minuteDiff / 60.0)
 
 		// Calculate actual days ago from record date
 		weight := 1.0
@@ -104,13 +113,17 @@ func scoreSignTime(candidateTime time.Duration, history []domain.SignRecord, tod
 				if daysAgo <= 7 {
 					weight = 2.0
 				}
+				// Increase weight for very recent days
+				if daysAgo <= 3 {
+					weight = 3.0
+				}
 			}
 		}
 
 		// Score based on time difference
 		// Further away = higher score
-		timeScore := diff / 12.0 // Normalize to 0-1 range (12 hours = perfect)
-		if diff < MinTimeBetweenSigns {
+		timeScore := totalDiff / 12.0 // Normalize to 0-1 range (12 hours = perfect)
+		if totalDiff < MinTimeBetweenSigns {
 			timeScore = 0.0 // Penalize times too close to history
 		}
 
@@ -162,11 +175,25 @@ func FormatWindow(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d", h, m)
 }
 
-// ParseTimeWindow parses HH:MM string to duration since midnight.
+// FormatWindowWithSeconds formats duration as HH:MM:SS.
+func FormatWindowWithSeconds(d time.Duration, seconds int) string {
+	h := int(d / time.Hour)
+	m := int((d % time.Hour) / time.Minute)
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, seconds)
+}
+
+// ParseTimeWindow parses HH:MM or HH:MM:SS string to duration since midnight.
 func ParseTimeWindow(timeStr string) (time.Duration, error) {
-	t, err := time.Parse("15:04", timeStr)
+	// Try parsing with seconds first
+	t, err := time.Parse("15:04:05", timeStr)
 	if err != nil {
-		return 0, err
+		// Fall back to HH:MM format for backward compatibility
+		t, err = time.Parse("15:04", timeStr)
+		if err != nil {
+			return 0, err
+		}
 	}
-	return time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute, nil
+	return time.Duration(t.Hour())*time.Hour + 
+		time.Duration(t.Minute())*time.Minute + 
+		time.Duration(t.Second())*time.Second, nil
 }

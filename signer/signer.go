@@ -115,7 +115,9 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	}
 
 	// Check if we're in the sign-in window (target time ± tolerance)
-	currentDur := time.Duration(nowLocal.Hour())*time.Hour + time.Duration(nowLocal.Minute())*time.Minute
+	currentDur := time.Duration(nowLocal.Hour())*time.Hour + 
+		time.Duration(nowLocal.Minute())*time.Minute +
+		time.Duration(nowLocal.Second())*time.Second
 
 	// Allow sign-in within 15 minutes before or after target time
 	tolerance := 15 * time.Minute
