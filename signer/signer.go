@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const signTolerance = 15 * time.Minute
+
 // Signer defines sign operations for an account.
 type Signer interface {
 	AttemptSign(now time.Time) error
@@ -93,9 +95,10 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 
 	// Generate target sign time if needed (new day)
 	if state.TargetSignTime == "" || state.TargetSignDate != today {
-		// Use full day range (00:00 - 24:00)
+		// Use near-full-day range (00:00 - latest schedulable target).
+		// Keep a buffer before midnight so the polling loop can still reach the target today.
 		start := 0 * time.Hour
-		end := 24 * time.Hour
+		end := as.latestSchedulableTargetEnd()
 
 		targetTime := scheduler.GenerateSmartSignTime(
 			start,
@@ -119,12 +122,12 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	}
 
 	// Check if we're in the sign-in window (target time ± tolerance)
-	currentDur := time.Duration(nowLocal.Hour())*time.Hour + 
+	currentDur := time.Duration(nowLocal.Hour())*time.Hour +
 		time.Duration(nowLocal.Minute())*time.Minute +
 		time.Duration(nowLocal.Second())*time.Second
 
 	// Allow sign-in within 15 minutes before or after target time
-	tolerance := 15 * time.Minute
+	tolerance := signTolerance
 	timeDiff := currentDur - targetDur
 	if timeDiff < 0 {
 		timeDiff = -timeDiff
@@ -258,7 +261,6 @@ func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *doma
 	}
 }
 
-
 // logSignSuccess logs successful sign-in details.
 func logSignSuccess(resp *service.SignResponse) {
 	log.Printf("✓ %s", resp.Msg)
@@ -274,7 +276,7 @@ func (as *AccountSigner) logNextSignInfo(state *domain.SignState) {
 
 	// Generate tomorrow's target sign time
 	start := 0 * time.Hour
-	end := 24 * time.Hour
+	end := as.latestSchedulableTargetEnd()
 
 	nextTargetTime := scheduler.GenerateSmartSignTime(
 		start,
@@ -288,4 +290,23 @@ func (as *AccountSigner) logNextSignInfo(state *domain.SignState) {
 	log.Printf("  签到日期: %s", tomorrowDate)
 	log.Printf("  预计时间: %s", nextTargetTime)
 	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+}
+
+// latestSchedulableTargetEnd returns the latest target time that can still be
+// reached by the periodic polling loop before date rollover.
+func (as *AccountSigner) latestSchedulableTargetEnd() time.Duration {
+	fullDay := 24 * time.Hour
+	if as.cfg == nil {
+		return fullDay - signTolerance
+	}
+
+	buffer := as.cfg.CheckInterval - signTolerance
+	if buffer < signTolerance {
+		buffer = signTolerance
+	}
+	if buffer >= fullDay {
+		return fullDay - signTolerance
+	}
+
+	return fullDay - buffer
 }
