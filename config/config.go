@@ -8,31 +8,25 @@ import (
 )
 
 const (
-	DefaultDynamicWindowStart = "08:00"
-	DefaultDynamicWindowEnd   = "20:00"
 	DefaultTZ                 = "Asia/Shanghai"
 	DefaultDataDir            = "./data"
 	DateLayout                = "2006-01-02"
 	TimeLayout                = "15:04:05"
 	DefaultRetryInterval      = 10 * time.Minute
 	DefaultForceSignOnStart   = true
-	DefaultEnableWindow       = true
 )
 
 var DefaultCheckInterval = 30 * time.Minute
 
 // AppConfig contains runtime configuration sourced from environment variables.
 type AppConfig struct {
-	Email              string
-	Password           string
-	DataDir            string
-	CheckInterval      time.Duration
-	DynamicWindowStart time.Duration
-	DynamicWindowEnd   time.Duration
-	EnableWindow       bool
-	Location           *time.Location
-	RetryInterval      time.Duration
-	ForceSignOnStart   bool
+	Email            string
+	Password         string
+	DataDir          string
+	CheckInterval    time.Duration
+	Location         *time.Location
+	RetryInterval    time.Duration
+	ForceSignOnStart bool
 }
 
 // Load reads configuration from environment variables.
@@ -50,9 +44,6 @@ func Load() (*AppConfig, error) {
 
 	interval := parseDurationWithDefault(os.Getenv("CHECK_INTERVAL"), DefaultCheckInterval)
 	retryInterval := parseDurationWithDefault(os.Getenv("RETRY_INTERVAL"), DefaultRetryInterval)
-	dynamicWindowStart := parseTimeWindow(os.Getenv("DYNAMIC_WINDOW_START"), DefaultDynamicWindowStart)
-	dynamicWindowEnd := parseTimeWindow(os.Getenv("DYNAMIC_WINDOW_END"), DefaultDynamicWindowEnd)
-	enableWindow := parseBoolWithDefault(os.Getenv("ENABLE_WINDOW"), DefaultEnableWindow)
 	forceSignOnStart := parseBoolWithDefault(os.Getenv("FORCE_SIGN_ON_START"), DefaultForceSignOnStart)
 
 	locName := os.Getenv("TZ")
@@ -66,16 +57,13 @@ func Load() (*AppConfig, error) {
 	}
 
 	return &AppConfig{
-		Email:              email,
-		Password:           password,
-		DataDir:            dataDir,
-		CheckInterval:      interval,
-		DynamicWindowStart: dynamicWindowStart,
-		DynamicWindowEnd:   dynamicWindowEnd,
-		EnableWindow:       enableWindow,
-		Location:           loc,
-		RetryInterval:      retryInterval,
-		ForceSignOnStart:   forceSignOnStart,
+		Email:            email,
+		Password:         password,
+		DataDir:          dataDir,
+		CheckInterval:    interval,
+		Location:         loc,
+		RetryInterval:    retryInterval,
+		ForceSignOnStart: forceSignOnStart,
 	}, nil
 }
 

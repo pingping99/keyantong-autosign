@@ -111,9 +111,6 @@ cd keyantong-autosign
 ABLESCI_EMAIL=you@example.com
 ABLESCI_PASSWORD=secret
 CHECK_INTERVAL=30m           # 每次签到检查间隔
-DYNAMIC_WINDOW_START=08:00
-DYNAMIC_WINDOW_END=18:00
-DYNAMIC_WINDOW_SPAN=45m
 TZ=Asia/Shanghai
 DATA_DIR=/app/data           # 容器内部日志/状态目录
 ```
@@ -142,19 +139,10 @@ docker compose down
 - `ABLESCI_EMAIL`：AbleSci 登录邮箱（必填）
 - `ABLESCI_PASSWORD`：AbleSci 登录密码（必填）
 - `CHECK_INTERVAL`：签到检查频率，支持 Go `time.Duration` 表达式（默认 `30m`）
-- `DYNAMIC_WINDOW_START`：动态签到窗口的起始时间（格式 `HH:MM`，默认 `08:00`）
-- `DYNAMIC_WINDOW_END`：动态签到窗口的结束时间（格式 `HH:MM`，默认 `18:00`）
-- `DYNAMIC_WINDOW_SPAN`：每日动态窗口的时长（支持 Go `time.Duration` 表达式，默认 `45m`）
 - `RETRY_INTERVAL`：窗口内签到失败后的最小重试间隔（默认 `10m`）
 - `FORCE_SIGN_ON_START`：程序启动时是否立即签到（默认 `true`）
 - `TZ`：运行时时区（默认 `Asia/Shanghai`）
 - `DATA_DIR`：日志和状态存放路径（默认 `./data`），可通过 `docker volume` 挂载到宿主机便于持久化
-
-**动态签到窗口说明**：
-- 程序会在每天的 `DYNAMIC_WINDOW_START` 至 `DYNAMIC_WINDOW_END` 范围内随机生成一个签到窗口
-- 窗口时长由 `DYNAMIC_WINDOW_SPAN` 指定（例如 45 分钟）
-- 每天的窗口位置随机，避免固定时间签到被检测
-- 同一天内窗口保持不变（持久化到状态文件）
 
 - Go 1.21+
 - net/http - HTTP 请求
