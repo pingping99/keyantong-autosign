@@ -54,13 +54,13 @@ func GenerateSmartSignTime(rangeStart, rangeEnd time.Duration, history []domain.
 		}
 	}
 
-	// Add small random jitter (0-5 minutes)
-	jitter := time.Duration(rng.Int63n(int64(5 * time.Minute)))
+	// Add random jitter (0-60 minutes) to ensure minutes are also random
+	jitter := time.Duration(rng.Int63n(int64(60 * time.Minute)))
 	finalTime := bestTime + jitter
 
 	// Ensure final time doesn't exceed range
 	if finalTime > rangeEnd {
-		finalTime = rangeEnd - time.Duration(rng.Int63n(int64(5*time.Minute)))
+		finalTime = rangeEnd - time.Duration(rng.Int63n(int64(60*time.Minute)))
 	}
 	if finalTime < rangeStart {
 		finalTime = rangeStart

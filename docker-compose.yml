@@ -13,8 +13,6 @@ services:
 
       # Optional: Smart sign-in configuration
       - CHECK_INTERVAL=30m              # Check interval (default: 30m)
-      - DYNAMIC_WINDOW_START=08:00      # Daily sign-in range start (default: 08:00)
-      - DYNAMIC_WINDOW_END=20:00        # Daily sign-in range end (default: 20:00)
       - RETRY_INTERVAL=10m              # Retry interval on failure (default: 10m)
       - FORCE_SIGN_ON_START=true        # Force sign on startup (default: true)
 

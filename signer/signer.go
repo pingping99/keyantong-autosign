@@ -93,9 +93,13 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 
 	// Generate target sign time if needed (new day)
 	if state.TargetSignTime == "" || state.TargetSignDate != today {
+		// Use full day range (00:00 - 24:00)
+		start := 0 * time.Hour
+		end := 24 * time.Hour
+
 		targetTime := scheduler.GenerateSmartSignTime(
-			as.cfg.DynamicWindowStart,
-			as.cfg.DynamicWindowEnd,
+			start,
+			end,
 			state.SignHistory,
 			today,
 		)
@@ -132,7 +136,9 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 			return nil
 		}
 		// Window missed — fallback: sign immediately if still within configured range
-		if currentDur <= as.cfg.DynamicWindowEnd {
+		end := 24 * time.Hour
+
+		if currentDur <= end {
 			log.Printf("已错过目标时间 %s，在允许范围内执行补签 (当前 %s)", state.TargetSignTime, nowTime)
 		} else {
 			as.fileLogger.Printf("已过目标签到时间 %s 且超出允许范围 (当前 %s)", state.TargetSignTime, nowTime)
@@ -267,21 +273,19 @@ func (as *AccountSigner) logNextSignInfo(state *domain.SignState) {
 	tomorrowDate := tomorrow.Format(config.DateLayout)
 
 	// Generate tomorrow's target sign time
+	start := 0 * time.Hour
+	end := 24 * time.Hour
+
 	nextTargetTime := scheduler.GenerateSmartSignTime(
-		as.cfg.DynamicWindowStart,
-		as.cfg.DynamicWindowEnd,
+		start,
+		end,
 		state.SignHistory,
 		tomorrowDate,
 	)
 
-	// Format window range
-	windowStart := scheduler.FormatWindow(as.cfg.DynamicWindowStart)
-	windowEnd := scheduler.FormatWindow(as.cfg.DynamicWindowEnd)
-
 	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Printf("下一次签到信息：")
 	log.Printf("  签到日期: %s", tomorrowDate)
-	log.Printf("  签到窗口: %s - %s", windowStart, windowEnd)
 	log.Printf("  预计时间: %s", nextTargetTime)
 	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"keyantong/config"
-	"keyantong/scheduler"
 	"keyantong/service"
 	"keyantong/signer"
 	"keyantong/store"
@@ -57,8 +56,7 @@ func main() {
 	// Build signer
 	s := signer.NewAccountSigner(svc, stateStore, cfg, fileLogger)
 
-	log.Printf("智能签到范围 %s-%s，检查间隔 %s，重试间隔 %s，时区 %s",
-		scheduler.FormatWindow(cfg.DynamicWindowStart), scheduler.FormatWindow(cfg.DynamicWindowEnd),
+	log.Printf("检查间隔 %s，重试间隔 %s，时区 %s",
 		cfg.CheckInterval, cfg.RetryInterval, cfg.Location)
 
 	// Force sign on startup if configured
