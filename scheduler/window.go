@@ -137,7 +137,14 @@ func scoreSignTime(candidateTime time.Duration, history []domain.SignRecord, tod
 // newSecureRandom creates a cryptographically secure random number generator.
 func newSecureRandom() *mathrand.Rand {
 	var seed int64
-	binary.Read(rand.Reader, binary.BigEndian, &seed)
+	// Use crypto/rand as primary entropy source
+	if err := binary.Read(rand.Reader, binary.BigEndian, &seed); err != nil {
+		// Fallback to time-based seed if crypto/rand fails (unlikely but safe)
+		seed = time.Now().UnixNano()
+	} else {
+		// Mix in time to ensure uniqueness even if crypto/rand is somehow static (e.g. VM snapshot/container)
+		seed ^= time.Now().UnixNano()
+	}
 	return mathrand.New(mathrand.NewSource(seed))
 }
 
@@ -196,4 +203,12 @@ func ParseTimeWindow(timeStr string) (time.Duration, error) {
 	return time.Duration(t.Hour())*time.Hour + 
 		time.Duration(t.Minute())*time.Minute + 
 		time.Duration(t.Second())*time.Second, nil
+}
+
+// SleepWithJitter sleeps for a random duration between 0 and maxSeconds.
+func SleepWithJitter(maxSeconds int) time.Duration {
+	rng := newSecureRandom()
+	jitter := time.Duration(rng.Intn(maxSeconds)) * time.Second
+	time.Sleep(jitter)
+	return jitter
 }
