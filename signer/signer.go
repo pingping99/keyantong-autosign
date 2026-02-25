@@ -51,10 +51,16 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 		state = &domain.SignState{}
 	}
 
+	// Add jitter (up to 120 seconds) to ensure startup time correlation is broken
+	jitter := scheduler.SleepWithJitter(120)
+	log.Printf("执行前随机抖动: %v", jitter)
+
 	if err := as.service.AutoSign(); err != nil {
 		return fmt.Errorf("强制签到失败: %w", err)
 	}
 
+	// Refresh time to reflect actual sign time
+	now = time.Now()
 	today := now.In(as.cfg.Location).Format(config.DateLayout)
 	nowTime := now.In(as.cfg.Location).Format(config.TimeLayout)
 	state.LastSignDate = today
@@ -161,6 +167,11 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 
 	// Attempt sign
 	log.Printf("到达签到时间窗口，开始签到... (目标: %s, 当前: %s)", state.TargetSignTime, nowTime)
+
+	// Add execution jitter (up to 60 seconds)
+	jitter := scheduler.SleepWithJitter(60)
+	log.Printf("执行前随机抖动: %v", jitter)
+
 	resp, err := as.performSignWithRetry()
 	if err != nil {
 		state.LastResult = "failed"
@@ -169,6 +180,11 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 		}
 		return fmt.Errorf("签到失败: %w", err)
 	}
+
+	// Refresh time to reflect actual sign time
+	nowLocal = time.Now().In(as.cfg.Location)
+	today = nowLocal.Format(config.DateLayout)
+	nowTime = nowLocal.Format(config.TimeLayout)
 
 	// Record result
 	as.recordSignState(resp, state, today, nowTime)
