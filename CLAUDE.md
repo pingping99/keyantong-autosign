@@ -67,9 +67,6 @@ Set these environment variables when `accounts.json` is absent:
 ### Runtime Configuration
 
 - `CHECK_INTERVAL` - Sign-in check frequency (default: `30m`)
-- `DYNAMIC_WINDOW_START` - Daily random window range start (default: `08:00`)
-- `DYNAMIC_WINDOW_END` - Daily random window range end (default: `18:00`)
-- `DYNAMIC_WINDOW_SPAN` - Window duration (default: `45m`)
 - `RETRY_INTERVAL` - Minimum retry interval on failure (default: `10m`)
 - `FORCE_SIGN_ON_START` - Force sign-in on startup (default: `true`)
 - `TZ` - Timezone (default: `Asia/Shanghai`)
@@ -93,7 +90,7 @@ keyantong/
 │   ├── state_store.go   # StateStore interface (Load/Save)
 │   └── file_store.go    # File-based implementation (JSON storage)
 ├── scheduler/           # Time window utilities
-│   └── window.go        # Window validation, random generation, time parsing
+│   └── window.go        # Window validation, random generation with jitter
 ├── signer/              # Sign-in orchestration
 │   └── signer.go        # Signer interface + AccountSigner implementation
 ├── service/             # AbleSci API layer
@@ -125,9 +122,9 @@ keyantong/
 2. **Force Sign-In** (if enabled): All accounts sign in immediately on startup
 3. **Periodic Checks**: Every `CHECK_INTERVAL`, each account's signer runs `AttemptSign()`
 4. **Dynamic Window Logic** (`signer/signer.go`):
-   - Check if current time is within today's dynamic window
-   - If no window exists for today, generate one using date-seeded randomization
-   - Window persists in state file to ensure consistency across restarts
+   - Generates a random target time for the day (00:00 - 24:00) using historical avoidance
+   - Persists target time in state file
+   - Adds random jitter (up to 60s) before executing sign-in to ensure second-level randomness
 5. **Throttling**: Skips attempts if within `RETRY_INTERVAL` of last attempt (prevents API spam)
 6. **Sign-In Execution** (`service/sign.go`):
    - Fetch CSRF token from login page
@@ -140,22 +137,24 @@ keyantong/
 ### Dynamic Sign-In Window Mechanism
 
 To avoid detection of fixed-time automated sign-ins:
-- Each day, a random window is generated within `DYNAMIC_WINDOW_START` to `DYNAMIC_WINDOW_END`
-- Window duration is `DYNAMIC_WINDOW_SPAN` (e.g., 45 minutes)
-- Random seed is based on the date, ensuring same window for the entire day
-- Window info is persisted in state file (survives restarts)
-- Implemented in `scheduler/window.go:GenerateDynamicWindow()`
+- Each day, a random target time is generated based on historical sign-in patterns
+- The algorithm avoids times similar to recent sign-ins (last 14 days)
+- Execution jitter is applied:
+  - 0-120 seconds random delay for forced sign-ins
+  - 0-60 seconds random delay for scheduled sign-ins
+- Random number generation uses mixed entropy (crypto/rand + time) to ensure uniqueness
+- Implemented in `scheduler/window.go` and `signer/signer.go`
 
 ### State Management
 
 Each account has independent state stored in `data/state_<account_id>.json`:
 - `last_sign_date` - Last successful sign-in date (YYYY-MM-DD)
 - `last_attempt_date` - Last attempt date
-- `last_attempt_time` - Last attempt time (HH:MM)
+- `last_attempt_time` - Last attempt time (HH:MM:SS)
 - `last_result` - Last result: "success", "failed", or "skip"
-- `window_date` - Dynamic window date (YYYY-MM-DD)
-- `window_start` - Dynamic window start time (HH:MM)
-- `window_end` - Dynamic window end time (HH:MM)
+- `target_sign_date` - Date of target sign-in
+- `target_sign_time` - Target sign-in time (HH:MM:SS)
+- `sign_history` - List of recent sign-in records
 
 State files are backward compatible - missing fields are auto-generated.
 
