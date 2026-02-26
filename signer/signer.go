@@ -92,7 +92,7 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 	state.SignHistory = scheduler.UpdateSignHistory(state.SignHistory, today, nowTime)
 
 	// Log next sign info after successful force sign
-	as.logNextSignInfo(state)
+	as.logNextSignInfo()
 
 	if err := as.store.Save(state); err != nil {
 		log.Printf("保存状态失败: %v", err)
@@ -251,14 +251,14 @@ func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *doma
 		state.LastSignDate = today
 		state.LastResult = "success"
 		state.SignHistory = scheduler.UpdateSignHistory(state.SignHistory, today, signTime)
-		as.logNextSignInfo(state)
+		as.logNextSignInfo()
 	case 1:
 		// Already signed today
 		log.Printf("%s", resp.Msg)
 		state.LastSignDate = today
 		state.LastResult = "success"
 		state.SignHistory = scheduler.UpdateSignHistory(state.SignHistory, today, signTime)
-		as.logNextSignInfo(state)
+		as.logNextSignInfo()
 	default:
 		log.Printf("签到未成功: %s", resp.Msg)
 		state.LastResult = "failed"
@@ -282,7 +282,7 @@ func logSignSuccess(resp *service.SignResponse) {
 }
 
 // logNextSignInfo logs next sign-in information.
-func (as *AccountSigner) logNextSignInfo(state *domain.SignState) {
+func (as *AccountSigner) logNextSignInfo() {
 	now := time.Now().In(as.cfg.Location)
 	tomorrow := now.AddDate(0, 0, 1)
 	tomorrowDate := tomorrow.Format(scheduler.DateLayout)
