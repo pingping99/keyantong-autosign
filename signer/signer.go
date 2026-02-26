@@ -116,7 +116,7 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 
 	// Check if already signed today
 	if state.LastSignDate == today {
-		as.fileLogger.Printf("今天 (%s) 已完成签到，跳过", today)
+		log.Printf("今天 (%s) 已完成签到，跳过", today)
 		return nil
 	}
 
@@ -278,6 +278,7 @@ func logSignSuccess(resp *service.SignResponse) {
 	if resp.Code == 0 {
 		log.Printf("  连续签到: %d 次", resp.Data.SignCount)
 		log.Printf("  本次获得: %d 积分", resp.Data.SignPoint)
+		log.Printf("  签到结果详情: %+v", resp)
 	}
 }
 
