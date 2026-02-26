@@ -53,6 +53,13 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 		state = &domain.SignState{}
 	}
 
+	// Check current time and warn if outside recommended hours
+	nowLocal := now.In(as.cfg.Location)
+	currentHour := nowLocal.Hour()
+	if currentHour < 8 || currentHour >= 22 {
+		log.Printf("⚠️  当前时间不在推荐的签到时间范围内 (08:00-22:00)，但仍将执行强制签到")
+	}
+
 	// Add jitter (up to 120 seconds) to ensure startup time correlation is broken
 	jitter := scheduler.SleepWithJitter(120)
 	log.Printf("执行前随机抖动: %v", jitter)
@@ -93,7 +100,8 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 	return nil
 }
 
-// AttemptSign attempts to sign in based on smart timing with pattern avoidance.
+// AttemptSign attempts to sign in if not already signed today.
+// Uses a simple daily sign-in approach without time windows.
 func (as *AccountSigner) AttemptSign(now time.Time) error {
 	nowLocal := now.In(as.cfg.Location)
 	today := nowLocal.Format(config.DateLayout)
@@ -112,62 +120,24 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 		return nil
 	}
 
-	// Generate target sign time if needed (new day)
-	if state.TargetSignTime == "" || state.TargetSignDate != today {
-		// Use full day range (00:00 - 24:00)
-		start := 0 * time.Hour
-		end := 24 * time.Hour
-
-		targetTime := scheduler.GenerateSmartSignTime(
-			start,
-			end,
-			state.SignHistory,
-			today,
-		)
-		state.TargetSignDate = today
-		state.TargetSignTime = targetTime
-		log.Printf("今日目标签到时间: %s (基于历史模式规避算法生成)", targetTime)
-		if saveErr := as.store.Save(state); saveErr != nil {
-			log.Printf("保存目标时间失败: %v", saveErr)
-		}
-	}
-
-	// Parse target time
-	targetDur, err := scheduler.ParseTimeWindow(state.TargetSignTime)
-	if err != nil {
-		log.Printf("解析目标时间失败: %v", err)
+	// Check if current time is within allowed sign-in hours
+	currentHour := nowLocal.Hour()
+	
+	// Time window logic:
+	// - 08:00-21:59: Normal sign-in window (preferred)
+	// - 22:00-23:59: Late window (sign immediately to avoid missing today)
+	// - 00:00-07:59: Too early, skip and wait for morning window
+	if currentHour < 8 {
+		as.fileLogger.Printf("当前时间 %s 过早 (< 08:00)，等待进入签到时间窗口", nowTime)
 		return nil
 	}
-
-	// Check if we're in the sign-in window (target time ± tolerance)
-	currentDur := time.Duration(nowLocal.Hour())*time.Hour +
-		time.Duration(nowLocal.Minute())*time.Minute +
-		time.Duration(nowLocal.Second())*time.Second
-
-	// Allow sign-in within 15 minutes before or after target time
-	tolerance := 15 * time.Minute
-	timeDiff := currentDur - targetDur
-	if timeDiff < 0 {
-		timeDiff = -timeDiff
+	
+	// If it's late (22:00+) but haven't signed today, log warning but proceed
+	if currentHour >= 22 {
+		log.Printf("⚠️  当前时间 %s 较晚，但今日尚未签到，立即执行以避免遗漏", nowTime)
 	}
 
-	if timeDiff > tolerance {
-		if currentDur < targetDur {
-			as.fileLogger.Printf("未到目标签到时间 %s (当前 %s)", state.TargetSignTime, nowTime)
-			return nil
-		}
-		// Window missed — fallback: sign immediately if still within configured range
-		end := 24 * time.Hour
-
-		if currentDur <= end {
-			log.Printf("已错过目标时间 %s，在允许范围内执行补签 (当前 %s)", state.TargetSignTime, nowTime)
-		} else {
-			as.fileLogger.Printf("已过目标签到时间 %s 且超出允许范围 (当前 %s)", state.TargetSignTime, nowTime)
-			return nil
-		}
-	}
-
-	// Throttle: check if last attempt was too recent
+	// Throttle: check if last attempt was too recent (prevent API spam)
 	if state.LastAttemptDate == today && state.LastAttemptTime != "" {
 		if as.shouldThrottle(nowLocal, state.LastAttemptTime) {
 			as.fileLogger.Printf("距离上次尝试 (%s) 不足 %v，节流跳过",
@@ -180,10 +150,10 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	state.LastAttemptDate = today
 	state.LastAttemptTime = nowTime
 
-	// Attempt sign
-	log.Printf("到达签到时间窗口，开始签到... (目标: %s, 当前: %s)", state.TargetSignTime, nowTime)
+	// Attempt sign-in
+	log.Printf("执行签到... (当前: %s)", nowTime)
 
-	// Add execution jitter (up to 60 seconds)
+	// Add execution jitter (up to 60 seconds) to minimize detection patterns
 	jitter := scheduler.SleepWithJitter(60)
 	log.Printf("执行前随机抖动: %v", jitter)
 
@@ -312,26 +282,15 @@ func logSignSuccess(resp *service.SignResponse) {
 	}
 }
 
-// logNextSignInfo logs next sign-in window and estimated time.
+// logNextSignInfo logs next sign-in information.
 func (as *AccountSigner) logNextSignInfo(state *domain.SignState) {
 	now := time.Now().In(as.cfg.Location)
 	tomorrow := now.AddDate(0, 0, 1)
 	tomorrowDate := tomorrow.Format(config.DateLayout)
 
-	// Generate tomorrow's target sign time
-	start := 0 * time.Hour
-	end := 24 * time.Hour
-
-	nextTargetTime := scheduler.GenerateSmartSignTime(
-		start,
-		end,
-		state.SignHistory,
-		tomorrowDate,
-	)
-
 	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Printf("下一次签到信息：")
 	log.Printf("  签到日期: %s", tomorrowDate)
-	log.Printf("  预计时间: %s", nextTargetTime)
+	log.Printf("  签到时间: 每日随机时间（避免规律检测）")
 	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 }
