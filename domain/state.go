@@ -13,5 +13,4 @@ type SignState struct {
 	LastAttemptTime string       `json:"last_attempt_time"` // Last attempt time (HH:MM:SS)
 	LastResult      string       `json:"last_result"`       // success/failed/skip
 	SignHistory     []SignRecord `json:"sign_history"`      // Recent sign history (last 14 days)
-	TodayDelayUsed  bool         `json:"today_delay_used"`  // Whether random delay has been applied for today
 }

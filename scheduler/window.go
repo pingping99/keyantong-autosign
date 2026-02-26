@@ -3,7 +3,6 @@ package scheduler
 import (
 	"crypto/rand"
 	"encoding/binary"
-	"fmt"
 	"keyantong/domain"
 	mathrand "math/rand"
 	"time"
@@ -23,14 +22,6 @@ func newSecureRandom() *mathrand.Rand {
 	return mathrand.New(mathrand.NewSource(seed))
 }
 
-// GenerateRandomSecondDelay generates a random second delay (0-59) for today's sign-in.
-// This ensures that even if multiple days have the same minute, seconds will vary.
-// The delay value is deterministic per day (same seed for same date) but varies daily.
-func GenerateRandomSecondDelay(dateStr string) int {
-	rng := newSecureRandom()
-	return rng.Intn(60)
-}
-
 // SleepWithJitter sleeps for a random duration between 0 and maxSeconds.
 func SleepWithJitter(maxSeconds int) time.Duration {
 	rng := newSecureRandom()
@@ -39,12 +30,6 @@ func SleepWithJitter(maxSeconds int) time.Duration {
 	return jitter
 }
 
-// FormatWindowWithSeconds formats duration as HH:MM:SS.
-func FormatWindowWithSeconds(d time.Duration, seconds int) string {
-	h := int(d / time.Hour)
-	m := int((d % time.Hour) / time.Minute)
-	return fmt.Sprintf("%02d:%02d:%02d", h, m, seconds)
-}
 // UpdateSignHistory adds a new sign record and maintains history window.
 func UpdateSignHistory(history []domain.SignRecord, date, time string) []domain.SignRecord {
 	const maxHistoryDays = 14

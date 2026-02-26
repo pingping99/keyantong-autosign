@@ -18,7 +18,6 @@
 keyantong/
 ├── main.go              # 主程序入口
 ├── go.mod               # Go 模块依赖
-├── .env.example         # 环境变量示例
 ├── client/
 │   └── client.go        # HTTP 客户端封装（含 Cookie 管理）
 ├── config/
