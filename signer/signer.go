@@ -60,8 +60,8 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 		log.Printf("⚠️  当前时间不在推荐的签到时间范围内 (08:00-22:00)，但仍将执行强制签到")
 	}
 
-	// Add jitter (up to 120 seconds) to ensure startup time correlation is broken
-	jitter := scheduler.SleepWithJitter(120)
+	// Add jitter (up to 5 minutes) to ensure startup time correlation is broken
+	jitter := scheduler.SleepWithJitter(300)
 	log.Printf("执行前随机抖动: %v", jitter)
 
 	ctx := context.Background()
@@ -153,8 +153,8 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	// Attempt sign-in
 	log.Printf("执行签到... (当前: %s)", nowTime)
 
-	// Add execution jitter (up to 60 seconds) to minimize detection patterns
-	jitter := scheduler.SleepWithJitter(60)
+	// Add execution jitter (up to 5 minutes) to minimize detection patterns and vary both minutes and seconds
+	jitter := scheduler.SleepWithJitter(300)
 	log.Printf("执行前随机抖动: %v", jitter)
 
 	resp, err := as.performSignWithRetry()
