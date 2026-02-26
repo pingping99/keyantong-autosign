@@ -1,11 +1,11 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"keyantong/client"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -31,8 +31,8 @@ type SignResponse struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 	Data struct {
-		SignCount    int    `json:"signcount"`
-		SignPoint    int    `json:"signpoint"`
+		SignCount     int    `json:"signcount"`
+		SignPoint     int    `json:"signpoint"`
 		TodayHistory string `json:"today_history"`
 		IsAlert      int    `json:"is_alert"`
 	} `json:"data"`
@@ -66,8 +66,8 @@ func NewService(email, password string) (*Service, error) {
 }
 
 // GetCSRFToken fetches CSRF token from login page
-func (s *Service) GetCSRFToken() (string, error) {
-	req, err := http.NewRequest("GET", LoginPage, nil)
+func (s *Service) GetCSRFToken(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, LoginPage, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -104,9 +104,9 @@ func (s *Service) GetCSRFToken() (string, error) {
 }
 
 // Login performs login operation
-func (s *Service) Login() error {
+func (s *Service) Login(ctx context.Context) error {
 	// Get CSRF token
-	csrfToken, err := s.GetCSRFToken()
+	csrfToken, err := s.GetCSRFToken(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get CSRF token: %w", err)
 	}
@@ -119,7 +119,7 @@ func (s *Service) Login() error {
 	data.Set("remember", "1")
 
 	// Create request
-	req, err := http.NewRequest("POST", LoginURL, strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, LoginURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return fmt.Errorf("failed to create login request: %w", err)
 	}
@@ -169,9 +169,10 @@ func (s *Service) Login() error {
 	return nil
 }
 
-// Sign performs sign-in operation
-func (s *Service) Sign() (*SignResponse, error) {
-	req, err := http.NewRequest("GET", SignURL, nil)
+// Sign performs sign-in operation.
+// Returns (nil, ErrLoginRequired) if the session has expired (HTTP 302 redirect to login page).
+func (s *Service) Sign(ctx context.Context) (*SignResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, SignURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sign request: %w", err)
 	}
@@ -189,6 +190,14 @@ func (s *Service) Sign() (*SignResponse, error) {
 		return nil, fmt.Errorf("failed to send sign request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Detect session expiry: server redirects to login page
+	if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusMovedPermanently {
+		location := resp.Header.Get("Location")
+		if strings.Contains(location, "login") || location == "" {
+			return nil, ErrLoginRequired
+		}
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -210,35 +219,8 @@ func (s *Service) Sign() (*SignResponse, error) {
 	return &signResp, nil
 }
 
-// AutoSign performs automatic sign-in process
-func (s *Service) AutoSign() error {
-	// Login first
-	log.Printf("正在登录...")
-	if err := s.Login(); err != nil {
-		return fmt.Errorf("登录失败: %w", err)
-	}
-	log.Printf("✓ 登录成功")
-
-	// Perform sign-in
-	log.Printf("正在签到...")
-	signResp, err := s.Sign()
-	if err != nil {
-		return fmt.Errorf("签到失败: %w", err)
-	}
-
-	// Display result
-	if signResp.Code == 0 {
-		log.Printf("✓ %s", signResp.Msg)
-		log.Printf("  连续签到: %d 次", signResp.Data.SignCount)
-		log.Printf("  本次获得: %d 积分", signResp.Data.SignPoint)
-	} else if signResp.Code == 1 {
-		log.Printf("✓ %s", signResp.Msg)
-	} else {
-		return fmt.Errorf("签到失败: %s", signResp.Msg)
-	}
-
-	return nil
-}
+// ErrLoginRequired is returned by Sign when the session has expired.
+var ErrLoginRequired = fmt.Errorf("login required: session expired or not authenticated")
 
 // truncateBody returns the first 200 bytes of body for error messages.
 func truncateBody(body []byte) string {

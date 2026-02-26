@@ -1,6 +1,8 @@
 package signer
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"keyantong/config"
 	"keyantong/domain"
@@ -55,14 +57,27 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 	jitter := scheduler.SleepWithJitter(120)
 	log.Printf("执行前随机抖动: %v", jitter)
 
-	if err := as.service.AutoSign(); err != nil {
+	ctx := context.Background()
+	log.Printf("正在登录...")
+	if err := as.service.Login(ctx); err != nil {
+		return fmt.Errorf("登录失败: %w", err)
+	}
+	log.Printf("✓ 登录成功")
+
+	log.Printf("正在签到...")
+	resp, err := as.service.Sign(ctx)
+	if err != nil {
 		return fmt.Errorf("强制签到失败: %w", err)
 	}
 
 	// Refresh time to reflect actual sign time
-	now = time.Now()
-	today := now.In(as.cfg.Location).Format(config.DateLayout)
-	nowTime := now.In(as.cfg.Location).Format(config.TimeLayout)
+	now = time.Now().In(as.cfg.Location)
+	today := now.Format(config.DateLayout)
+	nowTime := now.Format(config.TimeLayout)
+
+	// Log result
+	logSignSuccess(resp)
+
 	state.LastSignDate = today
 	state.LastAttemptDate = today
 	state.LastAttemptTime = nowTime
@@ -125,7 +140,7 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	}
 
 	// Check if we're in the sign-in window (target time ± tolerance)
-	currentDur := time.Duration(nowLocal.Hour())*time.Hour + 
+	currentDur := time.Duration(nowLocal.Hour())*time.Hour +
 		time.Duration(nowLocal.Minute())*time.Minute +
 		time.Duration(nowLocal.Second())*time.Second
 
@@ -207,22 +222,36 @@ func (as *AccountSigner) shouldThrottle(now time.Time, lastAttemptTime string) b
 
 // performSignWithRetry attempts sign-in with login retry logic.
 func (as *AccountSigner) performSignWithRetry() (*service.SignResponse, error) {
-	resp, err := as.service.Sign()
+	ctx := context.Background()
+
+	resp, err := as.service.Sign(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("签到请求失败: %w", err)
+		// Check if session expired (HTTP redirect detected)
+		if errors.Is(err, service.ErrLoginRequired) {
+			log.Printf("会话未登录或已过期，重新登录")
+			if loginErr := as.service.Login(ctx); loginErr != nil {
+				return nil, fmt.Errorf("登录失败: %w", loginErr)
+			}
+			resp, err = as.service.Sign(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("登录后签到请求失败: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("签到请求失败: %w", err)
+		}
 	}
 
-	// Handle login required
-	if isLoginRequired(resp) {
-		log.Printf("会话未登录或已过期，重新登录")
-		if err := as.service.Login(); err != nil {
-			return nil, fmt.Errorf("登录失败: %w", err)
+	// Also check response code for legacy login-required indication
+	if isLoginRequiredByCode(resp) {
+		log.Printf("响应码表明需要重新登录，重新登录")
+		if loginErr := as.service.Login(ctx); loginErr != nil {
+			return nil, fmt.Errorf("登录失败: %w", loginErr)
 		}
-		resp, err = as.service.Sign()
+		resp, err = as.service.Sign(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("登录后签到请求失败: %w", err)
 		}
-		if isLoginRequired(resp) {
+		if isLoginRequiredByCode(resp) {
 			return nil, fmt.Errorf("重新登录后仍无法签到，请检查账号凭证")
 		}
 	}
@@ -230,16 +259,13 @@ func (as *AccountSigner) performSignWithRetry() (*service.SignResponse, error) {
 	return resp, nil
 }
 
-// isLoginRequired checks if login is needed based on response.
-func isLoginRequired(resp *service.SignResponse) bool {
+// isLoginRequiredByCode checks if login is needed based on response code.
+// Only triggers for unexpected codes (not 0=success, not 1=already signed).
+func isLoginRequiredByCode(resp *service.SignResponse) bool {
 	if resp == nil {
 		return true
 	}
-	// Check if response indicates not logged in
-	if resp.Code != 0 && resp.Code != 1 {
-		return true
-	}
-	return false
+	return resp.Code != 0 && resp.Code != 1
 }
 
 // recordSignState saves sign result to state.
@@ -274,12 +300,16 @@ func (as *AccountSigner) recordSignState(resp *service.SignResponse, state *doma
 	}
 }
 
-
 // logSignSuccess logs successful sign-in details.
 func logSignSuccess(resp *service.SignResponse) {
+	if resp == nil {
+		return
+	}
 	log.Printf("✓ %s", resp.Msg)
-	log.Printf("  连续签到: %d 次", resp.Data.SignCount)
-	log.Printf("  本次获得: %d 积分", resp.Data.SignPoint)
+	if resp.Code == 0 {
+		log.Printf("  连续签到: %d 次", resp.Data.SignCount)
+		log.Printf("  本次获得: %d 积分", resp.Data.SignPoint)
+	}
 }
 
 // logNextSignInfo logs next sign-in window and estimated time.

@@ -18,12 +18,23 @@
 keyantong/
 ├── main.go              # 主程序入口
 ├── go.mod               # Go 模块依赖
-├── config.yaml          # 配置文件（需自行创建）
-├── config.yaml.example  # 配置文件示例
+├── .env.example         # 环境变量示例
 ├── client/
-│   └── client.go        # HTTP 客户端封装
+│   └── client.go        # HTTP 客户端封装（含 Cookie 管理）
+├── config/
+│   └── config.go        # 配置加载（环境变量）
+├── domain/
+│   ├── account.go       # 账号实体
+│   └── state.go         # 签到状态实体
+├── scheduler/
+│   └── window.go        # 时间窗工具函数
 ├── service/
-│   └── sign.go          # 登录和签到业务逻辑
+│   └── sign.go          # AbleSci API 调用（登录、签到）
+├── signer/
+│   └── signer.go        # 签到流程编排
+├── store/
+│   ├── state_store.go   # 状态存储接口
+│   └── file_store.go    # 文件系统实现
 └── interface.md         # 接口文档
 ```
 
@@ -144,10 +155,10 @@ docker compose down
 - `TZ`：运行时时区（默认 `Asia/Shanghai`）
 - `DATA_DIR`：日志和状态存放路径（默认 `./data`），可通过 `docker volume` 挂载到宿主机便于持久化
 
+## 依赖
+
 - Go 1.21+
-- net/http - HTTP 请求
-- cookiejar - Cookie 管理
-- gopkg.in/yaml.v3 - YAML 配置解析
+- 仅使用标准库（`net/http`、`net/http/cookiejar`），无需第三方依赖
 
 ## 许可证
 

@@ -30,14 +30,21 @@ func GenerateSmartSignTime(rangeStart, rangeEnd time.Duration, history []domain.
 		return FormatWindowWithSeconds(rangeStart, rng.Intn(60))
 	}
 
+	// Reserve jitter space so final time always stays within bounds
+	const maxJitter = 60 * time.Minute
+	candidateRange := availableRange
+	if candidateRange > maxJitter {
+		candidateRange -= maxJitter // leave room for jitter
+	}
+
 	// Generate candidate times (try up to 20 times to find good time)
 	maxAttempts := 20
 	var bestTime time.Duration
 	bestScore := -1.0
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		// Generate random time within range
-		offset := time.Duration(rng.Int63n(int64(availableRange)))
+		// Generate random time within safe range (leaves room for jitter)
+		offset := time.Duration(rng.Int63n(int64(candidateRange)))
 		candidateTime := rangeStart + offset
 
 		// Calculate score based on historical pattern avoidance
@@ -55,12 +62,19 @@ func GenerateSmartSignTime(rangeStart, rangeEnd time.Duration, history []domain.
 	}
 
 	// Add random jitter (0-60 minutes) to ensure minutes are also random
-	jitter := time.Duration(rng.Int63n(int64(60 * time.Minute)))
+	jitterRange := rangeEnd - bestTime
+	if jitterRange > maxJitter {
+		jitterRange = maxJitter
+	}
+	if jitterRange <= 0 {
+		jitterRange = time.Minute
+	}
+	jitter := time.Duration(rng.Int63n(int64(jitterRange)))
 	finalTime := bestTime + jitter
 
-	// Ensure final time doesn't exceed range
+	// Clamp to valid range (safety net)
 	if finalTime > rangeEnd {
-		finalTime = rangeEnd - time.Duration(rng.Int63n(int64(60*time.Minute)))
+		finalTime = rangeEnd
 	}
 	if finalTime < rangeStart {
 		finalTime = rangeStart
@@ -80,8 +94,10 @@ func scoreSignTime(candidateTime time.Duration, history []domain.SignRecord, tod
 	}
 
 	todayDate, todayErr := time.Parse(config.DateLayout, today)
-	candidateHours := candidateTime.Hours()
-	candidateMinutes := (candidateTime.Minutes() - candidateHours*60)
+	// Correctly extract hours and minutes from duration
+	candidateTotalMinutes := candidateTime.Minutes()
+	candidateHours := math.Floor(candidateTotalMinutes / 60)
+	candidateMinutes := candidateTotalMinutes - candidateHours*60
 	totalScore := 0.0
 
 	// Check against recent history (last 7 days weighted more)
@@ -91,8 +107,9 @@ func scoreSignTime(candidateTime time.Duration, history []domain.SignRecord, tod
 			continue
 		}
 
-		histHours := histTime.Hours()
-		histMinutes := (histTime.Minutes() - histHours*60)
+		histTotalMinutes := histTime.Minutes()
+		histHours := math.Floor(histTotalMinutes / 60)
+		histMinutes := histTotalMinutes - histHours*60
 
 		// Calculate time difference in hours (handle day wrap)
 		hourDiff := math.Abs(candidateHours - histHours)

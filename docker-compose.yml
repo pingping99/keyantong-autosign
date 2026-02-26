@@ -7,9 +7,9 @@ services:
     container_name: ablesci-sign
     restart: unless-stopped
     environment:
-      # Required: Account credentials
-      - ABLESCI_EMAIL=your@example.com
-      - ABLESCI_PASSWORD=secret
+      # Required: Account credentials (set in .env file or override here)
+      - ABLESCI_EMAIL=${ABLESCI_EMAIL}
+      - ABLESCI_PASSWORD=${ABLESCI_PASSWORD}
 
       # Optional: Smart sign-in configuration
       - CHECK_INTERVAL=30m              # Check interval (default: 30m)

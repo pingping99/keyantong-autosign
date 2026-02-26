@@ -80,20 +80,6 @@ func parseDurationWithDefault(raw string, fallback time.Duration) time.Duration 
 	return d
 }
 
-// parseTimeWindow parses time string (HH:MM) to duration since midnight.
-func parseTimeWindow(raw, fallback string) time.Duration {
-	input := raw
-	if input == "" {
-		input = fallback
-	}
-	parsed, err := time.Parse("15:04", input)
-	if err != nil {
-		log.Printf("invalid clock %q, fallback to %s: %v", input, fallback, err)
-		parsed, _ = time.Parse("15:04", fallback)
-	}
-	return time.Duration(parsed.Hour())*time.Hour + time.Duration(parsed.Minute())*time.Minute
-}
-
 // parseBoolWithDefault parses boolean string or returns default.
 func parseBoolWithDefault(raw string, fallback bool) bool {
 	if raw == "" {

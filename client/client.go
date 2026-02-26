@@ -22,6 +22,10 @@ func NewClient() (*Client, error) {
 		Client: &http.Client{
 			Jar:     jar,
 			Timeout: 30 * time.Second,
+			// Disable auto-redirect so we can detect login redirects manually
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 			Transport: &http.Transport{
 				MaxIdleConns:       10,
 				IdleConnTimeout:    30 * time.Second,

@@ -63,7 +63,7 @@ func main() {
 	forceSignDone := false
 	if cfg.ForceSignOnStart {
 		log.Printf("程序启动，立即执行登录并签到（无视时间窗口）")
-		now := time.Now()
+		now := time.Now().In(cfg.Location)
 		if err := s.ForceSign(now); err != nil {
 			log.Printf("启动签到失败: %v", err)
 		} else {

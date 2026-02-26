@@ -66,7 +66,7 @@ Sec-Fetch-Dest: empty
 
 #### 请求示例
 ```
-_csrf=xxx&LoginForm[email]=user@example.com&LoginForm[password]=password&LoginForm[rememberMe]=1
+_csrf=xxx&email=user@example.com&password=password&remember=1
 ```
 
 #### 响应示例
