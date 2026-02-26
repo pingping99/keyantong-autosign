@@ -13,10 +13,7 @@ import (
 )
 
 const (
-	BaseURL   = "https://www.ablesci.com"
-	LoginURL  = BaseURL + "/site/login"
-	SignURL   = BaseURL + "/user/sign"
-	LoginPage = BaseURL + "/site/login"
+// Pre-compiled regexps for CSRF token extraction
 )
 
 // Pre-compiled regexps for CSRF token extraction
@@ -31,8 +28,8 @@ type SignResponse struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 	Data struct {
-		SignCount     int    `json:"signcount"`
-		SignPoint     int    `json:"signpoint"`
+		SignCount    int    `json:"signcount"`
+		SignPoint    int    `json:"signpoint"`
 		TodayHistory string `json:"today_history"`
 		IsAlert      int    `json:"is_alert"`
 	} `json:"data"`
@@ -46,28 +43,35 @@ type LoginResponse struct {
 
 // Service handles sign-in operations
 type Service struct {
-	client   *client.Client
-	email    string
-	password string
+	client    *client.Client
+	email     string
+	password  string
+	baseURL   string
+	loginPath string
+	signPath  string
 }
 
-// NewService creates a new sign-in service
-func NewService(email, password string) (*Service, error) {
+// NewService creates a new sign-in service with configurable endpoints
+func NewService(email, password, baseURL, loginPath, signPath string) (*Service, error) {
 	c, err := client.NewClient()
 	if err != nil {
 		return nil, err
 	}
 
 	return &Service{
-		client:   c,
-		email:    email,
-		password: password,
+		client:    c,
+		email:     email,
+		password:  password,
+		baseURL:   baseURL,
+		loginPath: loginPath,
+		signPath:  signPath,
 	}, nil
 }
 
 // GetCSRFToken fetches CSRF token from login page
 func (s *Service) GetCSRFToken(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, LoginPage, nil)
+	loginPageURL := s.baseURL + s.loginPath
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, loginPageURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -119,7 +123,8 @@ func (s *Service) Login(ctx context.Context) error {
 	data.Set("remember", "1")
 
 	// Create request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, LoginURL, strings.NewReader(data.Encode()))
+	loginURL := s.baseURL + s.loginPath
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, loginURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return fmt.Errorf("failed to create login request: %w", err)
 	}
@@ -130,8 +135,8 @@ func (s *Service) Login(ctx context.Context) error {
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-	req.Header.Set("Origin", BaseURL)
-	req.Header.Set("Referer", LoginPage)
+	req.Header.Set("Origin", s.baseURL)
+	req.Header.Set("Referer", s.baseURL+s.loginPath)
 
 	// Send request
 	resp, err := s.client.Do(req)
@@ -172,7 +177,8 @@ func (s *Service) Login(ctx context.Context) error {
 // Sign performs sign-in operation.
 // Returns (nil, ErrLoginRequired) if the session has expired (HTTP 302 redirect to login page).
 func (s *Service) Sign(ctx context.Context) (*SignResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, SignURL, nil)
+	signURL := s.baseURL + s.signPath
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, signURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sign request: %w", err)
 	}
@@ -182,7 +188,7 @@ func (s *Service) Sign(ctx context.Context) (*SignResponse, error) {
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	req.Header.Set("Referer", BaseURL+"/")
+	req.Header.Set("Referer", s.baseURL+"/")
 
 	// Send request
 	resp, err := s.client.Do(req)

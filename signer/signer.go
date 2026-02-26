@@ -56,8 +56,8 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 	// Check current time and warn if outside recommended hours
 	nowLocal := now.In(as.cfg.Location)
 	currentHour := nowLocal.Hour()
-	if currentHour < 8 || currentHour >= 22 {
-		log.Printf("⚠️  当前时间不在推荐的签到时间范围内 (08:00-22:00)，但仍将执行强制签到")
+	if currentHour < as.cfg.EarlyHourThreshold || currentHour >= as.cfg.LateHourThreshold {
+		log.Printf("⚠️  当前时间不在推荐的签到时间范围内 (%02d:00-%02d:00)，但仍将执行强制签到", as.cfg.EarlyHourThreshold, as.cfg.LateHourThreshold)
 	}
 
 	// Add jitter (up to 5 minutes) to ensure startup time correlation is broken
@@ -79,8 +79,8 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 
 	// Refresh time to reflect actual sign time
 	now = time.Now().In(as.cfg.Location)
-	today := now.Format(config.DateLayout)
-	nowTime := now.Format(config.TimeLayout)
+	today := now.Format(scheduler.DateLayout)
+	nowTime := now.Format(scheduler.TimeLayout)
 
 	// Log result
 	logSignSuccess(resp)
@@ -104,8 +104,8 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 // Uses a simple daily sign-in approach without time windows.
 func (as *AccountSigner) AttemptSign(now time.Time) error {
 	nowLocal := now.In(as.cfg.Location)
-	today := nowLocal.Format(config.DateLayout)
-	nowTime := nowLocal.Format(config.TimeLayout)
+	today := nowLocal.Format(scheduler.DateLayout)
+	nowTime := nowLocal.Format(scheduler.TimeLayout)
 
 	// Load state
 	state, err := as.store.Load()
@@ -122,19 +122,19 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 
 	// Check if current time is within allowed sign-in hours
 	currentHour := nowLocal.Hour()
-	
+
 	// Time window logic:
-	// - 08:00-21:59: Normal sign-in window (preferred)
-	// - 22:00-23:59: Late window (sign immediately to avoid missing today)
-	// - 00:00-07:59: Too early, skip and wait for morning window
-	if currentHour < 8 {
-		as.fileLogger.Printf("当前时间 %s 过早 (< 08:00)，等待进入签到时间窗口", nowTime)
+	// - [EarlyHourThreshold, LateHourThreshold): Normal sign-in window (preferred)
+	// - [LateHourThreshold, 24): Late window (sign immediately to avoid missing today)
+	// - [0, EarlyHourThreshold): Too early, skip and wait for morning window
+	if currentHour < as.cfg.EarlyHourThreshold {
+		as.fileLogger.Printf("当前时间 %s 过早 (< %02d:00)，等待进入签到时间窗口", nowTime, as.cfg.EarlyHourThreshold)
 		return nil
 	}
-	
-	// If it's late (22:00+) but haven't signed today, log warning but proceed
-	if currentHour >= 22 {
-		log.Printf("⚠️  当前时间 %s 较晚，但今日尚未签到，立即执行以避免遗漏", nowTime)
+
+	// If it's late but haven't signed today, log warning but proceed
+	if currentHour >= as.cfg.LateHourThreshold {
+		log.Printf("⚠️  当前时间 %s 较晚 (>= %02d:00)，但今日尚未签到，立即执行以避免遗漏", nowTime, as.cfg.LateHourThreshold)
 	}
 
 	// Throttle: check if last attempt was too recent (prevent API spam)
@@ -168,8 +168,8 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 
 	// Refresh time to reflect actual sign time
 	nowLocal = time.Now().In(as.cfg.Location)
-	today = nowLocal.Format(config.DateLayout)
-	nowTime = nowLocal.Format(config.TimeLayout)
+	today = nowLocal.Format(scheduler.DateLayout)
+	nowTime = nowLocal.Format(scheduler.TimeLayout)
 
 	// Record result
 	as.recordSignState(resp, state, today, nowTime)
@@ -179,9 +179,8 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 // shouldThrottle checks if we should skip this attempt based on retry interval.
 func (as *AccountSigner) shouldThrottle(now time.Time, lastAttemptTime string) bool {
 	// Construct full datetime for comparison
-	today := now.Format(config.DateLayout)
-	lastAttempt, err := time.ParseInLocation(config.DateLayout+" "+config.TimeLayout,
-		today+" "+lastAttemptTime, as.cfg.Location)
+	today := now.Format(scheduler.DateLayout)
+	lastAttempt, err := scheduler.ParseDateTime(today, lastAttemptTime, as.cfg.Location)
 	if err != nil {
 		return false // If parse fails, don't throttle
 	}
@@ -286,11 +285,11 @@ func logSignSuccess(resp *service.SignResponse) {
 func (as *AccountSigner) logNextSignInfo(state *domain.SignState) {
 	now := time.Now().In(as.cfg.Location)
 	tomorrow := now.AddDate(0, 0, 1)
-	tomorrowDate := tomorrow.Format(config.DateLayout)
+	tomorrowDate := tomorrow.Format(scheduler.DateLayout)
 
 	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Printf("下一次签到信息：")
 	log.Printf("  签到日期: %s", tomorrowDate)
-	log.Printf("  签到时间: 每日随机时间（避免规律检测）")
+	log.Printf("  签到时间: 每日 %02d:00-%02d:00 之间随机时间（避免规律检测）", as.cfg.EarlyHourThreshold, as.cfg.LateHourThreshold)
 	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 }

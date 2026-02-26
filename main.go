@@ -17,11 +17,8 @@ import (
 
 const maxLogSize = 5 * 1024 * 1024 // 5MB
 
-// fileLogger is used for logging only to file (not to stdout)
-var fileLogger *log.Logger
-
 func main() {
-	// Load configuration
+	// Load global configuration
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
@@ -39,44 +36,68 @@ func main() {
 	log.SetFlags(log.LstdFlags)
 
 	// Setup file-only logger (for quiet logs outside sign window)
-	fileLogger = log.New(logFile, "", log.LstdFlags)
+	fileLogger := log.New(logFile, "", log.LstdFlags)
 
-	// Initialize state store
-	stateStore, err := store.NewFileStore(cfg.DataDir)
+	// Load accounts from file or environment variables
+	accounts, err := config.LoadAccounts()
 	if err != nil {
-		log.Fatalf("Failed to create state store: %v", err)
+		log.Fatalf("Failed to load accounts: %v", err)
 	}
 
-	// Initialize service
-	svc, err := service.NewService(cfg.Email, cfg.Password)
-	if err != nil {
-		log.Fatalf("Failed to initialize service: %v", err)
-	}
-
-	// Build signer
-	s := signer.NewAccountSigner(svc, stateStore, cfg, fileLogger)
-
+	log.Printf("加载 %d 个账户", len(accounts))
 	log.Printf("检查间隔 %s，重试间隔 %s，时区 %s",
 		cfg.CheckInterval, cfg.RetryInterval, cfg.Location)
 
+	// Create store factory for per-account state management
+	storeFactory := store.NewFileStoreFactory(cfg.DataDir)
+
+	// Create signers for each account
+	var signers []signer.Signer
+	for i, acc := range accounts {
+		// Initialize service with configured API endpoints
+		svc, err := service.NewService(
+			acc.Email,
+			acc.Password,
+			cfg.APIBaseURL,
+			cfg.APILoginPath,
+			cfg.APISignPath,
+		)
+		if err != nil {
+			log.Printf("账户 %d (%s) 初始化失败: %v", i+1, acc.Email, err)
+			continue
+		}
+
+		// Generate unique account ID (hash of email) for consistent state file naming
+		accountID := store.GenerateAccountID(acc.Email)
+
+		// Create account-specific state store
+		stateStore := storeFactory.CreateStore(accountID)
+
+		// Build signer
+		s := signer.NewAccountSigner(svc, stateStore, cfg, fileLogger)
+		signers = append(signers, s)
+		log.Printf("✓ 账户 %d 已加载: %s", i+1, acc.Email)
+	}
+
+	if len(signers) == 0 {
+		log.Fatalf("没有可用的账户")
+	}
+
 	// Force sign on startup if configured
-	forceSignDone := false
 	if cfg.ForceSignOnStart {
 		log.Printf("程序启动，立即执行登录并签到（无视时间窗口）")
 		now := time.Now().In(cfg.Location)
-		if err := s.ForceSign(now); err != nil {
-			log.Printf("启动签到失败: %v", err)
-		} else {
-			forceSignDone = true
+		for i, s := range signers {
+			if err := s.ForceSign(now); err != nil {
+				log.Printf("账户 %d 启动签到失败: %v", i+1, err)
+			}
 		}
 	} else {
 		log.Printf("程序启动，已禁用强制签到，等待窗口内自动签到")
 	}
 
-	// Run initial check only if force sign was not successful
-	if !forceSignDone {
-		runCheck(s)
-	}
+	// Run initial check
+	runChecks(signers)
 
 	// Setup graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -92,16 +113,18 @@ func main() {
 			log.Printf("收到退出信号，正在优雅关闭...")
 			return
 		case <-ticker.C:
-			runCheck(s)
+			runChecks(signers)
 		}
 	}
 }
 
-// runCheck executes sign attempt for the signer.
-func runCheck(s signer.Signer) {
+// runChecks executes sign attempt for all signers.
+func runChecks(signers []signer.Signer) {
 	now := time.Now()
-	if err := s.AttemptSign(now); err != nil {
-		log.Printf("签到失败: %v", err)
+	for i, s := range signers {
+		if err := s.AttemptSign(now); err != nil {
+			log.Printf("账户 %d 签到失败: %v", i+1, err)
+		}
 	}
 }
 
