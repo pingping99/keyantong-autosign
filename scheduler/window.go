@@ -3,6 +3,7 @@ package scheduler
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"keyantong/domain"
 	mathrand "math/rand"
 	"time"
@@ -30,14 +31,35 @@ func SleepWithJitter(maxSeconds int) time.Duration {
 	return jitter
 }
 
+// GenerateRandomSignTime generates a random time string (HH:MM:SS) within [startHour:00, endHour:00).
+// A 1-hour buffer is reserved before endHour to ensure the sign-in can be captured
+// by periodic checks before the working hours cutoff.
+func GenerateRandomSignTime(startHour, endHour int) string {
+	// Reserve 1-hour buffer before endHour for safety
+	effectiveEndHour := endHour - 1
+	if effectiveEndHour <= startHour {
+		effectiveEndHour = startHour + 1
+	}
+
+	rng := newSecureRandom()
+	totalMinutes := (effectiveEndHour - startHour) * 60
+	randomMinutes := rng.Intn(totalMinutes)
+
+	hour := startHour + randomMinutes/60
+	minute := randomMinutes % 60
+	second := rng.Intn(60)
+
+	return fmt.Sprintf("%02d:%02d:%02d", hour, minute, second)
+}
+
 // UpdateSignHistory adds a new sign record and maintains history window.
-func UpdateSignHistory(history []domain.SignRecord, date, time string) []domain.SignRecord {
+func UpdateSignHistory(history []domain.SignRecord, date, timeStr string) []domain.SignRecord {
 	const maxHistoryDays = 14
 
 	// Add new record
 	newRecord := domain.SignRecord{
 		Date: date,
-		Time: time,
+		Time: timeStr,
 	}
 
 	history = append(history, newRecord)

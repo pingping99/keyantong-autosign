@@ -8,9 +8,11 @@ type SignRecord struct {
 
 // SignState tracks sign-in state and attempt history.
 type SignState struct {
-	LastSignDate    string       `json:"last_sign_date"`    // Last successful sign date (YYYY-MM-DD)
-	LastAttemptDate string       `json:"last_attempt_date"` // Last attempt date (YYYY-MM-DD)
-	LastAttemptTime string       `json:"last_attempt_time"` // Last attempt time (HH:MM:SS)
-	LastResult      string       `json:"last_result"`       // success/failed/skip
-	SignHistory     []SignRecord `json:"sign_history"`      // Recent sign history (last 14 days)
+	LastSignDate    string       `json:"last_sign_date"`             // Last successful sign date (YYYY-MM-DD)
+	LastAttemptDate string       `json:"last_attempt_date"`          // Last attempt date (YYYY-MM-DD)
+	LastAttemptTime string       `json:"last_attempt_time"`          // Last attempt time (HH:MM:SS)
+	LastResult      string       `json:"last_result"`                // success/failed/skip
+	SignHistory     []SignRecord `json:"sign_history"`               // Recent sign history (last 14 days)
+	WindowDate      string       `json:"window_date,omitempty"`      // Date for which sign window was generated (YYYY-MM-DD)
+	WindowSignTime  string       `json:"window_sign_time,omitempty"` // Random sign time for the day (HH:MM:SS)
 }

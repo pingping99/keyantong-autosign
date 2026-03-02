@@ -43,7 +43,20 @@ func NewAccountSigner(
 }
 
 // ForceSign performs forced sign-in (used on startup).
+// Respects working hours to avoid non-working-time sign-ins.
 func (as *AccountSigner) ForceSign(now time.Time) error {
+	nowLocal := now.In(as.cfg.Location)
+	currentHour := nowLocal.Hour()
+	nowTime := nowLocal.Format(scheduler.TimeLayout)
+
+	// Respect working hours - refuse to sign outside working time
+	if currentHour < as.cfg.EarlyHourThreshold || currentHour >= as.cfg.LateHourThreshold {
+		log.Printf("当前时间 %s 不在工作时间范围 (%02d:00-%02d:00)，跳过启动签到",
+			nowTime, as.cfg.EarlyHourThreshold, as.cfg.LateHourThreshold)
+		log.Printf("将在工作时间内根据随机窗口自动签到")
+		return nil
+	}
+
 	log.Printf("强制执行登录与签到")
 
 	// Load existing state to preserve sign history
@@ -51,13 +64,6 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 	if err != nil {
 		log.Printf("无法加载状态，使用空状态: %v", err)
 		state = &domain.SignState{}
-	}
-
-	// Check current time and warn if outside recommended hours
-	nowLocal := now.In(as.cfg.Location)
-	currentHour := nowLocal.Hour()
-	if currentHour < as.cfg.EarlyHourThreshold || currentHour >= as.cfg.LateHourThreshold {
-		log.Printf("⚠️  当前时间不在推荐的签到时间范围内 (%02d:00-%02d:00)，但仍将执行强制签到", as.cfg.EarlyHourThreshold, as.cfg.LateHourThreshold)
 	}
 
 	// Add jitter (up to 5 minutes) to ensure startup time correlation is broken
@@ -80,7 +86,7 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 	// Refresh time to reflect actual sign time
 	now = time.Now().In(as.cfg.Location)
 	today := now.Format(scheduler.DateLayout)
-	nowTime := now.Format(scheduler.TimeLayout)
+	nowTime = now.Format(scheduler.TimeLayout)
 
 	// Log result
 	logSignSuccess(resp)
@@ -101,7 +107,8 @@ func (as *AccountSigner) ForceSign(now time.Time) error {
 }
 
 // AttemptSign attempts to sign in if not already signed today.
-// Uses a simple daily sign-in approach without time windows.
+// Uses a dynamic random window within working hours to avoid detection patterns
+// and refuses to sign outside working hours.
 func (as *AccountSigner) AttemptSign(now time.Time) error {
 	nowLocal := now.In(as.cfg.Location)
 	today := nowLocal.Format(scheduler.DateLayout)
@@ -116,25 +123,47 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 
 	// Check if already signed today
 	if state.LastSignDate == today {
-		log.Printf("今天 (%s) 已完成签到，跳过", today)
+		as.fileLogger.Printf("今天 (%s) 已完成签到，跳过", today)
 		return nil
 	}
 
-	// Check if current time is within allowed sign-in hours
 	currentHour := nowLocal.Hour()
 
-	// Time window logic:
-	// - [EarlyHourThreshold, LateHourThreshold): Normal sign-in window (preferred)
-	// - [LateHourThreshold, 24): Late window (sign immediately to avoid missing today)
-	// - [0, EarlyHourThreshold): Too early, skip and wait for morning window
+	// Before working hours - skip (non-working time)
 	if currentHour < as.cfg.EarlyHourThreshold {
-		as.fileLogger.Printf("当前时间 %s 过早 (< %02d:00)，等待进入签到时间窗口", nowTime, as.cfg.EarlyHourThreshold)
+		as.fileLogger.Printf("当前时间 %s 不在工作时间 (< %02d:00)，跳过签到",
+			nowTime, as.cfg.EarlyHourThreshold)
 		return nil
 	}
 
-	// If it's late but haven't signed today, log warning but proceed
+	// After working hours - skip (non-working time, avoid late-night signing)
 	if currentHour >= as.cfg.LateHourThreshold {
-		log.Printf("⚠️  当前时间 %s 较晚 (>= %02d:00)，但今日尚未签到，立即执行以避免遗漏", nowTime, as.cfg.LateHourThreshold)
+		as.fileLogger.Printf("当前时间 %s 已超过工作时间 (>= %02d:00)，今日不再尝试签到",
+			nowTime, as.cfg.LateHourThreshold)
+		return nil
+	}
+
+	// Within working hours - ensure dynamic random window exists for today
+	as.ensureWindowForToday(state, today)
+
+	// Safety check: if the next check cycle would fall outside working hours,
+	// this is our last chance to sign today - override window timing
+	isLastChance := false
+	nextCheck := nowLocal.Add(as.cfg.CheckInterval)
+	if nextCheck.Hour() >= as.cfg.LateHourThreshold || nextCheck.Day() != nowLocal.Day() {
+		isLastChance = true
+	}
+
+	// Check if we've reached the random sign time (or it's last chance)
+	if !isLastChance && nowTime < state.WindowSignTime {
+		as.fileLogger.Printf("未到今日随机签到时间 (%s)，当前 %s，等待中",
+			state.WindowSignTime, nowTime)
+		return nil
+	}
+
+	if isLastChance && nowTime < state.WindowSignTime {
+		log.Printf("⚠️  接近工作时间结束，提前执行签到（原计划: %s，当前: %s）",
+			state.WindowSignTime, nowTime)
 	}
 
 	// Throttle: check if last attempt was too recent (prevent API spam)
@@ -151,7 +180,7 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	state.LastAttemptTime = nowTime
 
 	// Attempt sign-in
-	log.Printf("执行签到... (当前: %s)", nowTime)
+	log.Printf("执行签到... (当前: %s, 计划时间: %s)", nowTime, state.WindowSignTime)
 
 	// Add execution jitter (up to 5 minutes) to minimize detection patterns and vary both minutes and seconds
 	jitter := scheduler.SleepWithJitter(300)
@@ -174,6 +203,24 @@ func (as *AccountSigner) AttemptSign(now time.Time) error {
 	// Record result
 	as.recordSignState(resp, state, today, nowTime)
 	return nil
+}
+
+// ensureWindowForToday generates and persists a random sign time for today if not already set.
+func (as *AccountSigner) ensureWindowForToday(state *domain.SignState, today string) {
+	if state.WindowDate == today && state.WindowSignTime != "" {
+		as.fileLogger.Printf("今日签到窗口已存在: %s %s", state.WindowDate, state.WindowSignTime)
+		return
+	}
+
+	signTime := scheduler.GenerateRandomSignTime(as.cfg.EarlyHourThreshold, as.cfg.LateHourThreshold)
+	state.WindowDate = today
+	state.WindowSignTime = signTime
+
+	log.Printf("生成今日随机签到时间: %s %s", today, signTime)
+
+	if err := as.store.Save(state); err != nil {
+		log.Printf("保存签到窗口失败: %v", err)
+	}
 }
 
 // shouldThrottle checks if we should skip this attempt based on retry interval.
@@ -291,6 +338,8 @@ func (as *AccountSigner) logNextSignInfo() {
 	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Printf("下一次签到信息：")
 	log.Printf("  签到日期: %s", tomorrowDate)
-	log.Printf("  签到时间: 每日 %02d:00-%02d:00 之间随机时间（避免规律检测）", as.cfg.EarlyHourThreshold, as.cfg.LateHourThreshold)
+	log.Printf("  工作时间窗口: %02d:00 - %02d:00", as.cfg.EarlyHourThreshold, as.cfg.LateHourThreshold)
+	log.Printf("  签到时间: 将在工作时间窗口内随机生成（避免规律检测）")
+	log.Printf("  非工作时间: 自动跳过，不执行签到")
 	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 }
