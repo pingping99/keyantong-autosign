@@ -185,11 +185,11 @@ func yamlStr(cfg *YAMLConfig, field string) string {
 	case "timezone":
 		return cfg.Timezone
 	case "api_base_url":
-		return cfg.APIBaseURL
+		return cfg.API.BaseURL
 	case "api_login_path":
-		return cfg.APILoginPath
+		return cfg.API.LoginPath
 	case "api_sign_path":
-		return cfg.APISignPath
+		return cfg.API.SignPath
 	}
 	return ""
 }

@@ -16,7 +16,7 @@
 ### 方式一：config.yml（推荐）
 
 ```bash
-cp config.yml.example config.yml
+cp config.yaml.example config.yml
 # 编辑 config.yml，填入账户信息
 go run main.go
 ```
@@ -98,7 +98,7 @@ keyantong/
 │   ├── service.go       # HTTP 客户端 + AbleSci API
 │   ├── signer.go        # 签到编排（重试、窗口判断）
 │   └── timeutil.go      # 时间工具、随机窗口生成
-├── config.yml.example   # 配置模板
+├── config.yaml.example   # 配置模板
 ├── docker-compose.yml   # Docker 部署
 └── Dockerfile
 ```
