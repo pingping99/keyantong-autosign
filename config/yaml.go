@@ -27,8 +27,8 @@ type yamlAPI struct {
 
 // configSearchPaths defines the ordered list of paths to search for config.yml.
 var configSearchPaths = []string{
-	"config.yml",
 	"config.yaml",
+	"data/config.yaml",
 }
 
 // FindConfigFile searches for a configuration file in the default locations.

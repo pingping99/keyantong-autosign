@@ -21,8 +21,6 @@ services:
       - DATA_DIR=/app/data              # Data directory for logs and state
     volumes:
       - ./data:/app/data
-      - ./config.yaml:/app/config.yaml:ro
-      - ./config.yml:/app/config.yml:ro
     logging:
       driver: "json-file"
       options:
