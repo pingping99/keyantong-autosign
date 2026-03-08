@@ -1,14 +1,16 @@
-# Configuration file with credentials
+# Configuration files with credentials
+config.yml
 config.yaml
+
+# Data directory (state files, logs, accounts)
+data/
 
 # Binary files
 *.exe
 ablesci-sign
-ablesci-sign.exe
 
 # Logs
 *.log
-sign.log
 
 # Go build artifacts
 /vendor/

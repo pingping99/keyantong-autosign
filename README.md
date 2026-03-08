@@ -1,164 +1,137 @@
-# AbleSci 自动签到脚本
+# AbleSci 自动签到 (keyantong-autosign)
 
-基于 Go 语言开发的科研通（AbleSci.com）自动签到脚本。项目已在 GitHub 开源：<https://github.com/pingping99/keyantong-autosign>。
+科研通 (AbleSci.com) 自动签到工具，支持多账户管理、随机签到窗口、Docker 部署。
 
 ## 功能特性
 
-- ✅ 自动登录
-- ✅ 自动签到
-- ✅ 支持 CSRF 令牌验证
-- ✅ Cookie 会话管理
-- ✅ 详细的签到结果显示
-- ✅ 首次使用自动登录签到
-- ✅ 登录状态检查与自动重登录
+- 🔄 **多账户支持** — 同时管理多个账户，独立状态跟踪
+- 🎲 **随机签到窗口** — 每日生成随机签到时间，避免检测
+- ⏰ **工作时间限制** — 仅在设定时间范围内执行签到
+- 🔁 **自动重试** — 登录过期自动重登、失败自动重试
+- 📝 **日志轮转** — 自动管理日志文件大小
+- 🐳 **Docker 支持** — 开箱即用的容器化部署
+
+## 快速开始
+
+### 方式一：config.yml（推荐）
+
+```bash
+cp config.yml.example config.yml
+# 编辑 config.yml，填入账户信息
+go run main.go
+```
+
+### 方式二：环境变量
+
+```bash
+export ABLESCI_EMAIL=your@example.com
+export ABLESCI_PASSWORD=your_password
+go run main.go
+```
+
+### 方式三：Docker
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入账户信息
+docker compose up -d --build
+```
+
+## 配置
+
+### 配置优先级
+
+```
+环境变量  >  config.yml  >  默认值
+```
+
+### 配置项
+
+| 配置项 | 环境变量 | YAML 键名 | 默认值 | 说明 |
+|--------|----------|-----------|--------|------|
+| 账户邮箱 | `ABLESCI_EMAIL` | `accounts[].email` | — | 必填 |
+| 账户密码 | `ABLESCI_PASSWORD` | `accounts[].password` | — | 必填 |
+| 数据目录 | `DATA_DIR` | `data_dir` | `./data` | 日志和状态文件 |
+| 检查间隔 | `CHECK_INTERVAL` | `check_interval` | `30m` | Go duration 格式 |
+| 重试间隔 | `RETRY_INTERVAL` | `retry_interval` | `10m` | 签到失败后重试 |
+| 强制启动签到 | `FORCE_SIGN_ON_START` | `force_sign_on_start` | `true` | 启动时立即签到 |
+| 时区 | `TZ` | `timezone` | `Asia/Shanghai` | — |
+| 工作时间起始 | `EARLY_HOUR_THRESHOLD` | `early_hour_threshold` | `8` | 小时 (0-23) |
+| 工作时间结束 | `LATE_HOUR_THRESHOLD` | `late_hour_threshold` | `22` | 小时 (0-23) |
+
+### 账户配置优先级
+
+```
+环境变量 (ABLESCI_EMAIL/PASSWORD)  >  config.yml accounts  >  data/accounts.json
+```
+
+**config.yml 方式（多账户）：**
+
+```yaml
+accounts:
+  - email: user1@example.com
+    password: password1
+  - email: user2@example.com
+    password: password2
+```
+
+**accounts.json 方式：**
+
+```json
+[
+  {"email": "user1@example.com", "password": "password1"},
+  {"email": "user2@example.com", "password": "password2"}
+]
+```
 
 ## 项目结构
 
 ```
 keyantong/
-├── main.go              # 主程序入口
-├── go.mod               # Go 模块依赖
-├── client/
-│   └── client.go        # HTTP 客户端封装（含 Cookie 管理）
+├── main.go              # 入口：组装依赖、启动定时检查
 ├── config/
-│   └── config.go        # 配置加载（环境变量）
-├── domain/
-│   ├── account.go       # 账号实体
-│   └── state.go         # 签到状态实体
-├── scheduler/
-│   └── window.go        # 时间窗工具函数
-├── service/
-│   └── sign.go          # AbleSci API 调用（登录、签到）
-├── signer/
-│   └── signer.go        # 签到流程编排
-├── store/
-│   ├── state_store.go   # 状态存储接口
-│   └── file_store.go    # 文件系统实现
-└── interface.md         # 接口文档
+│   ├── config.go        # 配置加载（优先级解析）、账户加载
+│   └── yaml.go          # 轻量级 YAML 解析器
+├── core/
+│   ├── model.go         # 数据模型（SignState, SignRecord）
+│   ├── store.go         # 状态持久化（文件存储）
+│   ├── service.go       # HTTP 客户端 + AbleSci API
+│   ├── signer.go        # 签到编排（重试、窗口判断）
+│   └── timeutil.go      # 时间工具、随机窗口生成
+├── config.yml.example   # 配置模板
+├── docker-compose.yml   # Docker 部署
+└── Dockerfile
 ```
 
-## 快速开始
+## 签到流程
 
-### 1. 安装依赖
+1. **启动** — 加载配置、初始化各账户签到器
+2. **强制签到**（可选）— 启动时立即签到（尊重工作时间）
+3. **定时检查** — 每 `CHECK_INTERVAL` 检查一次
+4. **随机窗口** — 每日生成随机签到时间，持久化到状态文件
+5. **执行签到** — 到达随机时间后，添加抖动延迟，执行签到
+6. **自动重登** — 会话过期时自动重新登录并重试
+7. **状态记录** — 保存签到结果，防止重复签到
 
-```bash
-go mod tidy
-```
-
-### 2. 配置账号
-
-使用环境变量配置您的账号信息：
-
-```bash
-export ABLESCI_EMAIL="your_email@example.com"
-export ABLESCI_PASSWORD="your_password"
-```
-
-### 3. 运行脚本
+## 开发
 
 ```bash
-go run main.go
-```
-
-或编译后运行：
-
-```bash
+# 构建
 go build -o ablesci-sign.exe
-./ablesci-sign.exe
-```
 
-## 运行示例
+# 运行
+go run main.go
 
-```
-=== AbleSci 自动签到脚本 ===
-正在登录...
-✓ 登录成功
-正在签到...
-✓ 签到成功，您已连续签到 1 次，本次获得 20 积分。
-  连续签到: 1 次
-  本次获得: 20 积分
-
-签到完成!
-```
-
-## 注意事项
-
-- 请妥善保管您的账号密码，建议使用环境变量而不是硬编码
-- 建议配合定时任务（如 cron、Windows 任务计划程序）实现每日自动签到
-- 本脚本仅供学习交流使用
-- 首次运行时会自动执行登录与签到
-- 签到状态保存在 `data/state.json`
-- 程序运行时会自动检查登录状态，如果会话失效会自动重新登录
-
-## 定时任务配置
-
-### Windows 任务计划程序
-
-1. 打开"任务计划程序"
-2. 创建基本任务，设置每天运行
-3. 操作选择"启动程序"，选择编译后的 exe 文件
-4. 完成配置
-
-### Linux/Mac Cron
-
-```bash
-# 每天早上 8:00 执行签到
-0 8 * * * cd /path/to/keyantong && ./ablesci-sign >> sign.log 2>&1
-```
-
-## Docker Compose 安装
-
-1. 克隆源码：
-
-```bash
-git clone https://github.com/pingping99/keyantong-autosign.git
-cd keyantong-autosign
-```
-
-2. 可选将环境变量写入 `.env` 文件（Docker Compose 会自动加载）：
-
-```dotenv
-ABLESCI_EMAIL=you@example.com
-ABLESCI_PASSWORD=secret
-CHECK_INTERVAL=30m           # 每次签到检查间隔
-TZ=Asia/Shanghai
-DATA_DIR=/app/data           # 容器内部日志/状态目录
-```
-
-3. 启动容器：
-
-```bash
+# Docker
 docker compose up -d --build
-```
-
-4. 可选查看日志和状态：
-
-```bash
 docker compose logs -f ablesci-sign
-docker compose exec ablesci-sign cat /app/data/sign.log
 ```
-
-5. 停止并清理：
-
-```bash
-docker compose down
-```
-
-### 环境变量说明
-
-- `ABLESCI_EMAIL`：AbleSci 登录邮箱（必填）
-- `ABLESCI_PASSWORD`：AbleSci 登录密码（必填）
-- `CHECK_INTERVAL`：签到检查频率，支持 Go `time.Duration` 表达式（默认 `30m`）
-- `RETRY_INTERVAL`：窗口内签到失败后的最小重试间隔（默认 `10m`）
-- `FORCE_SIGN_ON_START`：程序启动时是否立即签到（默认 `true`）
-- `TZ`：运行时时区（默认 `Asia/Shanghai`）
-- `DATA_DIR`：日志和状态存放路径（默认 `./data`），可通过 `docker volume` 挂载到宿主机便于持久化
 
 ## 依赖
 
 - Go 1.21+
-- 仅使用标准库（`net/http`、`net/http/cookiejar`），无需第三方依赖
+- 零外部依赖（仅使用标准库）
 
-## 许可证
+## 许可
 
 MIT License

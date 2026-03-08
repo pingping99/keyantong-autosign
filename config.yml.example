@@ -1,0 +1,39 @@
+# config.yml.example
+# 复制此文件为 config.yml 并填入实际配置
+# cp config.yml.example config.yml
+#
+# 配置优先级: 环境变量 > config.yml > 默认值
+
+# 数据目录（日志和状态文件存储位置）
+data_dir: ./data
+
+# 检查间隔（Go duration 格式: 30m, 1h, 等）
+check_interval: 30m
+
+# 签到失败后的重试间隔
+retry_interval: 10m
+
+# 时区
+timezone: Asia/Shanghai
+
+# 启动时是否强制签到（true/false）
+force_sign_on_start: true
+
+# 工作时间窗口（小时）
+# 签到只在 early_hour_threshold ~ late_hour_threshold 之间执行
+early_hour_threshold: 8
+late_hour_threshold: 22
+
+# API 配置（一般无需修改）
+api:
+  base_url: https://www.ablesci.com
+  login_path: /site/login
+  sign_path: /user/sign
+
+# 账户列表
+# 也可以使用 data/accounts.json 或环境变量 ABLESCI_EMAIL/ABLESCI_PASSWORD
+accounts:
+  - email: user1@example.com
+    password: your_password_here
+  # - email: user2@example.com
+  #   password: your_password_here

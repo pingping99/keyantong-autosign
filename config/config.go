@@ -1,9 +1,12 @@
 package config
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -12,8 +15,8 @@ const (
 	DefaultDataDir            = "./data"
 	DefaultRetryInterval      = 10 * time.Minute
 	DefaultForceSignOnStart   = true
-	DefaultEarlyHourThreshold = 8  // Earliest hour to sign in (00:00-07:59 is too early)
-	DefaultLateHourThreshold  = 22 // Always execute if haven't signed by this hour
+	DefaultEarlyHourThreshold = 8
+	DefaultLateHourThreshold  = 22
 	DefaultAPIBaseURL         = "https://www.ablesci.com"
 	DefaultAPILoginPath       = "/site/login"
 	DefaultAPISignPath        = "/user/sign"
@@ -21,77 +24,198 @@ const (
 
 var DefaultCheckInterval = 30 * time.Minute
 
-// AppConfig contains runtime configuration sourced from environment variables.
-// Note: Email and Password are account-level data, not global configuration.
-// Load accounts separately using LoadAccounts().
+// Account represents a login credential pair.
+type Account struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// AppConfig contains runtime configuration.
+// Priority: Environment Variables > config.yml > Defaults
 type AppConfig struct {
 	DataDir            string
 	CheckInterval      time.Duration
 	Location           *time.Location
 	RetryInterval      time.Duration
 	ForceSignOnStart   bool
-	EarlyHourThreshold int    // Hour before which to skip signing (e.g., 8 = skip 00:00-07:59)
-	LateHourThreshold  int    // Hour at/after which to force sign immediately if not done (e.g., 22)
-	APIBaseURL         string // Base URL for API (e.g., https://www.ablesci.com)
-	APILoginPath       string // Path for login endpoint
-	APISignPath        string // Path for sign-in endpoint
+	EarlyHourThreshold int
+	LateHourThreshold  int
+	APIBaseURL         string
+	APILoginPath       string
+	APISignPath        string
 }
 
-// Load reads configuration from environment variables.
-// Note: Accounts are loaded separately using LoadAccounts().
+// Load reads configuration following priority: ENV > config.yml > defaults.
 func Load() (*AppConfig, error) {
-	dataDir := os.Getenv("DATA_DIR")
-	if dataDir == "" {
-		dataDir = DefaultDataDir
+	// Step 1: Try to load config.yml
+	configPath := FindConfigFile()
+	var yamlCfg *YAMLConfig
+	if configPath != "" {
+		var err error
+		yamlCfg, err = LoadYAML(configPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse %s: %w", configPath, err)
+		}
+		if yamlCfg != nil {
+			log.Printf("从 %s 加载配置", configPath)
+		}
 	}
 
-	interval := parseDurationWithDefault(os.Getenv("CHECK_INTERVAL"), DefaultCheckInterval)
-	retryInterval := parseDurationWithDefault(os.Getenv("RETRY_INTERVAL"), DefaultRetryInterval)
-	forceSignOnStart := parseBoolWithDefault(os.Getenv("FORCE_SIGN_ON_START"), DefaultForceSignOnStart)
+	// Step 2: Build config with priority: ENV > YAML > Default
+	cfg := &AppConfig{}
 
-	earlyHourThreshold := parseIntWithDefault(os.Getenv("EARLY_HOUR_THRESHOLD"), DefaultEarlyHourThreshold)
-	lateHourThreshold := parseIntWithDefault(os.Getenv("LATE_HOUR_THRESHOLD"), DefaultLateHourThreshold)
+	cfg.DataDir = resolve(os.Getenv("DATA_DIR"), yamlStr(yamlCfg, "data_dir"), DefaultDataDir)
+	cfg.CheckInterval = parseDurationWithDefault(
+		resolve(os.Getenv("CHECK_INTERVAL"), yamlStr(yamlCfg, "check_interval"), ""),
+		DefaultCheckInterval,
+	)
+	cfg.RetryInterval = parseDurationWithDefault(
+		resolve(os.Getenv("RETRY_INTERVAL"), yamlStr(yamlCfg, "retry_interval"), ""),
+		DefaultRetryInterval,
+	)
+	cfg.ForceSignOnStart = resolveBool(
+		os.Getenv("FORCE_SIGN_ON_START"),
+		yamlBool(yamlCfg),
+		DefaultForceSignOnStart,
+	)
+	cfg.EarlyHourThreshold = resolveInt(
+		os.Getenv("EARLY_HOUR_THRESHOLD"),
+		yamlInt(yamlCfg, "early"),
+		DefaultEarlyHourThreshold,
+	)
+	cfg.LateHourThreshold = resolveInt(
+		os.Getenv("LATE_HOUR_THRESHOLD"),
+		yamlInt(yamlCfg, "late"),
+		DefaultLateHourThreshold,
+	)
+	cfg.APIBaseURL = resolve(os.Getenv("API_BASE_URL"), yamlStr(yamlCfg, "api_base_url"), DefaultAPIBaseURL)
+	cfg.APILoginPath = resolve(os.Getenv("API_LOGIN_PATH"), yamlStr(yamlCfg, "api_login_path"), DefaultAPILoginPath)
+	cfg.APISignPath = resolve(os.Getenv("API_SIGN_PATH"), yamlStr(yamlCfg, "api_sign_path"), DefaultAPISignPath)
 
-	apiBaseURL := os.Getenv("API_BASE_URL")
-	if apiBaseURL == "" {
-		apiBaseURL = DefaultAPIBaseURL
-	}
-
-	apiLoginPath := os.Getenv("API_LOGIN_PATH")
-	if apiLoginPath == "" {
-		apiLoginPath = DefaultAPILoginPath
-	}
-
-	apiSignPath := os.Getenv("API_SIGN_PATH")
-	if apiSignPath == "" {
-		apiSignPath = DefaultAPISignPath
-	}
-
-	locName := os.Getenv("TZ")
-	if locName == "" {
-		locName = DefaultTZ
-	}
+	locName := resolve(os.Getenv("TZ"), yamlStr(yamlCfg, "timezone"), DefaultTZ)
 	loc, err := time.LoadLocation(locName)
 	if err != nil {
 		log.Printf("Failed to load timezone %q, falling back to Local: %v", locName, err)
 		loc = time.Local
 	}
+	cfg.Location = loc
 
-	return &AppConfig{
-		DataDir:            dataDir,
-		CheckInterval:      interval,
-		Location:           loc,
-		RetryInterval:      retryInterval,
-		ForceSignOnStart:   forceSignOnStart,
-		EarlyHourThreshold: earlyHourThreshold,
-		LateHourThreshold:  lateHourThreshold,
-		APIBaseURL:         apiBaseURL,
-		APILoginPath:       apiLoginPath,
-		APISignPath:        apiSignPath,
-	}, nil
+	return cfg, nil
 }
 
-// parseDurationWithDefault parses duration string or returns default.
+// LoadAccounts loads accounts following priority:
+//
+//	ENV (ABLESCI_EMAIL/PASSWORD) > config.yml accounts > data/accounts.json
+func LoadAccounts(dataDir string) ([]Account, error) {
+	// Priority 1: Environment variables
+	email := os.Getenv("ABLESCI_EMAIL")
+	password := os.Getenv("ABLESCI_PASSWORD")
+	if email != "" && password != "" {
+		return []Account{{Email: email, Password: password}}, nil
+	}
+
+	// Priority 2: config.yml accounts section
+	configPath := FindConfigFile()
+	if configPath != "" {
+		yamlCfg, err := LoadYAML(configPath)
+		if err == nil && yamlCfg != nil && len(yamlCfg.Accounts) > 0 {
+			return yamlCfg.Accounts, nil
+		}
+	}
+
+	// Priority 3: data/accounts.json file
+	accountsPath := filepath.Join(dataDir, "accounts.json")
+	if data, err := os.ReadFile(accountsPath); err == nil {
+		var accounts []Account
+		if err := json.Unmarshal(data, &accounts); err != nil {
+			return nil, err
+		}
+		if len(accounts) > 0 {
+			return accounts, nil
+		}
+	}
+
+	return nil, errors.New("no accounts found: set ABLESCI_EMAIL/PASSWORD env vars, or configure accounts in config.yml, or create data/accounts.json")
+}
+
+// --- Priority resolution helpers ---
+
+func resolve(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func resolveBool(envVal string, yamlVal *bool, fallback bool) bool {
+	if envVal != "" {
+		return parseBoolWithDefault(envVal, fallback)
+	}
+	if yamlVal != nil {
+		return *yamlVal
+	}
+	return fallback
+}
+
+func resolveInt(envVal string, yamlVal *int, fallback int) int {
+	if envVal != "" {
+		return parseIntWithDefault(envVal, fallback)
+	}
+	if yamlVal != nil {
+		return *yamlVal
+	}
+	return fallback
+}
+
+// --- YAML accessor helpers ---
+
+func yamlStr(cfg *YAMLConfig, field string) string {
+	if cfg == nil {
+		return ""
+	}
+	switch field {
+	case "data_dir":
+		return cfg.DataDir
+	case "check_interval":
+		return cfg.CheckInterval
+	case "retry_interval":
+		return cfg.RetryInterval
+	case "timezone":
+		return cfg.Timezone
+	case "api_base_url":
+		return cfg.APIBaseURL
+	case "api_login_path":
+		return cfg.APILoginPath
+	case "api_sign_path":
+		return cfg.APISignPath
+	}
+	return ""
+}
+
+func yamlBool(cfg *YAMLConfig) *bool {
+	if cfg == nil {
+		return nil
+	}
+	return cfg.ForceSignOnStart
+}
+
+func yamlInt(cfg *YAMLConfig, which string) *int {
+	if cfg == nil {
+		return nil
+	}
+	switch which {
+	case "early":
+		return cfg.EarlyHourThreshold
+	case "late":
+		return cfg.LateHourThreshold
+	}
+	return nil
+}
+
+// --- Parse helpers ---
+
 func parseDurationWithDefault(raw string, fallback time.Duration) time.Duration {
 	if raw == "" {
 		return fallback
@@ -104,7 +228,6 @@ func parseDurationWithDefault(raw string, fallback time.Duration) time.Duration 
 	return d
 }
 
-// parseBoolWithDefault parses boolean string or returns default.
 func parseBoolWithDefault(raw string, fallback bool) bool {
 	if raw == "" {
 		return fallback
@@ -120,7 +243,6 @@ func parseBoolWithDefault(raw string, fallback bool) bool {
 	}
 }
 
-// parseIntWithDefault parses integer string or returns default.
 func parseIntWithDefault(raw string, fallback int) int {
 	if raw == "" {
 		return fallback

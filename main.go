@@ -4,9 +4,7 @@ import (
 	"context"
 	"io"
 	"keyantong/config"
-	"keyantong/service"
-	"keyantong/signer"
-	"keyantong/store"
+	"keyantong/core"
 	"log"
 	"os"
 	"os/signal"
@@ -18,10 +16,15 @@ import (
 const maxLogSize = 5 * 1024 * 1024 // 5MB
 
 func main() {
-	// Load global configuration
+	// Load global configuration (priority: ENV > config.yml > defaults)
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// Ensure data directory exists
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		log.Fatalf("Failed to create data directory %q: %v", cfg.DataDir, err)
 	}
 
 	// Setup logging
@@ -38,8 +41,8 @@ func main() {
 	// Setup file-only logger (for quiet logs outside sign window)
 	fileLogger := log.New(logFile, "", log.LstdFlags)
 
-	// Load accounts from file or environment variables
-	accounts, err := config.LoadAccounts()
+	// Load accounts (priority: ENV > config.yml > data/accounts.json)
+	accounts, err := config.LoadAccounts(cfg.DataDir)
 	if err != nil {
 		log.Fatalf("Failed to load accounts: %v", err)
 	}
@@ -49,13 +52,12 @@ func main() {
 		cfg.CheckInterval, cfg.RetryInterval, cfg.Location)
 
 	// Create store factory for per-account state management
-	storeFactory := store.NewFileStoreFactory(cfg.DataDir)
+	storeFactory := core.NewFileStoreFactory(cfg.DataDir)
 
 	// Create signers for each account
-	var signers []signer.Signer
+	var signers []core.Signer
 	for i, acc := range accounts {
-		// Initialize service with configured API endpoints
-		svc, err := service.NewService(
+		svc, err := core.NewService(
 			acc.Email,
 			acc.Password,
 			cfg.APIBaseURL,
@@ -67,14 +69,10 @@ func main() {
 			continue
 		}
 
-		// Generate unique account ID (hash of email) for consistent state file naming
-		accountID := store.GenerateAccountID(acc.Email)
-
-		// Create account-specific state store
+		accountID := core.GenerateAccountID(acc.Email)
 		stateStore := storeFactory.CreateStore(accountID)
 
-		// Build signer
-		s := signer.NewAccountSigner(svc, stateStore, cfg, fileLogger)
+		s := core.NewAccountSigner(svc, stateStore, cfg, fileLogger)
 		signers = append(signers, s)
 		log.Printf("✓ 账户 %d 已加载: %s", i+1, acc.Email)
 	}
@@ -119,7 +117,7 @@ func main() {
 }
 
 // runChecks executes sign attempt for all signers.
-func runChecks(signers []signer.Signer) {
+func runChecks(signers []core.Signer) {
 	now := time.Now()
 	for i, s := range signers {
 		if err := s.AttemptSign(now); err != nil {
@@ -132,13 +130,12 @@ func runChecks(signers []signer.Signer) {
 func rotateLogFile(path string) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return // File doesn't exist yet, nothing to rotate
+		return
 	}
 	if info.Size() < maxLogSize {
 		return
 	}
 	backupPath := path + ".old"
-	// Remove previous backup if exists
 	os.Remove(backupPath)
 	if err := os.Rename(path, backupPath); err != nil {
 		log.Printf("日志轮转失败: %v", err)

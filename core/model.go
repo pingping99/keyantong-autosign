@@ -1,4 +1,4 @@
-package domain
+package core
 
 // SignRecord represents a single sign-in record.
 type SignRecord struct {
