@@ -221,6 +221,10 @@ func (s *Service) Sign() (*SignResponse, error) {
 		return nil, fmt.Errorf("failed to read sign response: %w", err)
 	}
 
+	if strings.Contains(string(body), `need-login-tips`) || strings.Contains(string(body), `对不起，您的操作需要登录才可以进行`) {
+		return nil, ErrLoginRequired
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("sign request failed with status %d: %s", resp.StatusCode, truncateBody(body))
 	}
