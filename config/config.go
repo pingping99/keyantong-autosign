@@ -255,3 +255,8 @@ func parseIntWithDefault(raw string, fallback int) int {
 	}
 	return val
 }
+
+// String implements fmt.Stringer to redact sensitive information
+func (a Account) String() string {
+	return "Account{Email: " + a.Email + ", Password: [REDACTED]}"
+}
