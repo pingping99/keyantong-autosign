@@ -13,6 +13,8 @@ services:
       - CHECK_INTERVAL=30m              # Check interval (default: 30m)
       - RETRY_INTERVAL=10m              # Retry interval on failure (default: 10m)
       - FORCE_SIGN_ON_START=true        # Force sign on startup (default: true)
+      - EARLY_HOUR_THRESHOLD=8
+      - LATE_HOUR_THRESHOLD=22
 
       # Optional: System configuration
       - TZ=Asia/Shanghai                # Timezone (default: Asia/Shanghai)
