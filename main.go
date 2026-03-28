@@ -6,6 +6,9 @@ import (
 	"keyantong/config"
 	"keyantong/core"
 	"log"
+	"encoding/json"
+	"net/http"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -41,6 +44,23 @@ func main() {
 	// 创建文件日志器（用于非工作时间的静默日志）
 	fileLogger := log.New(logFile, "", log.LstdFlags)
 
+	// Start health check server
+	healthPort := os.Getenv("HEALTH_CHECK_PORT")
+	if healthPort == "" {
+		healthPort = "8080"
+	}
+	go func() {
+		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			info := core.GetHealth()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(info)
+		})
+		log.Printf("Starting health check server on port %s", healthPort)
+		if err := http.ListenAndServe(":"+healthPort, nil); err != nil {
+			log.Printf("Health check server error: %v", err)
+		}
+	}()
 	// 加载账户（优先级: ENV > config.yml > data/accounts.json）
 	accounts, err := config.LoadAccounts(cfg.DataDir)
 	if err != nil {
@@ -96,7 +116,7 @@ func main() {
 		now := time.Now().In(cfg.Location)
 		for i, s := range signers {
 			if err := s.SignOnStartup(ctx, now); err != nil {
-				log.Printf("账户 %d 启动签到失败: %v", i+1, err)
+				core.Notify(fmt.Sprintf("账户 %d 启动签到失败: %v", i+1, err))
 			}
 		}
 	} else {
@@ -176,7 +196,7 @@ func runChecks(ctx context.Context, signers []core.Signer, cfg *config.AppConfig
 		if err := s.AttemptSign(ctx, now); err != nil {
 			// 只记录非预期错误（已签到不算错误）
 			if !core.IsAlreadySignedError(err) {
-				log.Printf("账户 %d 签到失败: %v", i+1, err)
+				core.Notify(fmt.Sprintf("账户 %d 签到失败: %v", i+1, err))
 			}
 		}
 	}

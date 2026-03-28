@@ -176,6 +176,7 @@ func (as *AccountSigner) AttemptSign(ctx context.Context, now time.Time) error {
 	resp, err := as.performSignWithRetryContext(ctx)
 	if err != nil {
 		state.LastResult = "failed"
+		UpdateHealth("failed")
 		if saveErr := as.store.Save(state); saveErr != nil {
 			log.Printf("保存失败状态出错: %v", saveErr)
 		}
@@ -215,6 +216,7 @@ func (as *AccountSigner) doSignWithContext(ctx context.Context, state *SignState
 	state.LastAttemptDate = today
 	state.LastAttemptTime = nowTime
 	state.LastResult = "success"
+		UpdateHealth("success")
 	state.SignHistory = UpdateSignHistory(state.SignHistory, today, nowTime)
 
 	as.logNextSignInfo()
@@ -308,17 +310,20 @@ func (as *AccountSigner) recordSignState(resp *SignResponse, state *SignState, t
 		logSignSuccess(resp)
 		state.LastSignDate = today
 		state.LastResult = "success"
+		UpdateHealth("success")
 		state.SignHistory = UpdateSignHistory(state.SignHistory, today, signTime)
 		as.logNextSignInfo()
 	case 1:
 		log.Printf("%s", resp.Msg)
 		state.LastSignDate = today
 		state.LastResult = "success"
+		UpdateHealth("success")
 		state.SignHistory = UpdateSignHistory(state.SignHistory, today, signTime)
 		as.logNextSignInfo()
 	default:
 		log.Printf("签到未成功: %s", resp.Msg)
 		state.LastResult = "failed"
+		UpdateHealth("failed")
 	}
 
 	if err := as.store.Save(state); err != nil {
