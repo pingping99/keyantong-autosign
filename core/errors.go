@@ -152,3 +152,15 @@ func WrapError(err error, errType ErrorType, message string) error {
 	}
 	return NewSignError(errType, message, err)
 }
+
+// IsAlreadySignedError 判断是否是"今日已签到"错误
+func IsAlreadySignedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var signErr *SignError
+	if errors.As(err, &signErr) {
+		return signErr.Type == ErrTypeAlreadySigned
+	}
+	return false
+}

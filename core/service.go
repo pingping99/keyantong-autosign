@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,10 +80,11 @@ func NewService(email, password, baseURL, loginPath, signPath string) (*Service,
 			return http.ErrUseLastResponse
 		},
 		Transport: &http.Transport{
-			MaxIdleConns:       10,
-			IdleConnTimeout:    30 * time.Second,
-			DisableCompression: false,
-			DisableKeepAlives:  false,
+			MaxIdleConns:        10,
+			IdleConnTimeout:     30 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+			DisableCompression:  false,
+			DisableKeepAlives:   false,
 		},
 	}
 
@@ -96,10 +98,14 @@ func NewService(email, password, baseURL, loginPath, signPath string) (*Service,
 	}, nil
 }
 
-// GetCSRFToken fetches CSRF token from login page.
-func (s *Service) GetCSRFToken() (string, error) {
+// =============================================================================
+// 带 Context 的方法（推荐使用）
+// =============================================================================
+
+// GetCSRFTokenWithContext 获取 CSRF token（支持取消）
+func (s *Service) GetCSRFTokenWithContext(ctx context.Context) (string, error) {
 	loginPageURL := s.baseURL + s.loginPath
-	req, err := http.NewRequest(http.MethodGet, loginPageURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, loginPageURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -110,6 +116,9 @@ func (s *Service) GetCSRFToken() (string, error) {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("request cancelled: %w", ctx.Err())
+		}
 		return "", fmt.Errorf("failed to get login page: %w", err)
 	}
 	defer resp.Body.Close()
@@ -132,9 +141,9 @@ func (s *Service) GetCSRFToken() (string, error) {
 	return "", fmt.Errorf("CSRF token not found in page")
 }
 
-// Login performs login operation.
-func (s *Service) Login() error {
-	csrfToken, err := s.GetCSRFToken()
+// LoginWithContext 登录（支持取消）
+func (s *Service) LoginWithContext(ctx context.Context) error {
+	csrfToken, err := s.GetCSRFTokenWithContext(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get CSRF token: %w", err)
 	}
@@ -146,7 +155,7 @@ func (s *Service) Login() error {
 	data.Set("remember", "1")
 
 	loginURL := s.baseURL + s.loginPath
-	req, err := http.NewRequest(http.MethodPost, loginURL, strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, loginURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return fmt.Errorf("failed to create login request: %w", err)
 	}
@@ -160,6 +169,9 @@ func (s *Service) Login() error {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("login cancelled: %w", ctx.Err())
+		}
 		return fmt.Errorf("failed to send login request: %w", err)
 	}
 	defer resp.Body.Close()
@@ -190,10 +202,10 @@ func (s *Service) Login() error {
 	return nil
 }
 
-// Sign performs sign-in operation.
-func (s *Service) Sign() (*SignResponse, error) {
+// SignWithContext 签到（支持取消）
+func (s *Service) SignWithContext(ctx context.Context) (*SignResponse, error) {
 	signURL := s.baseURL + s.signPath
-	req, err := http.NewRequest(http.MethodGet, signURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, signURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sign request: %w", err)
 	}
@@ -205,6 +217,9 @@ func (s *Service) Sign() (*SignResponse, error) {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("sign request cancelled: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("failed to send sign request: %w", err)
 	}
 	defer resp.Body.Close()
@@ -236,6 +251,28 @@ func (s *Service) Sign() (*SignResponse, error) {
 	}
 
 	return &signResp, nil
+}
+
+// =============================================================================
+// 旧版方法（向后兼容）
+// =============================================================================
+
+// GetCSRFToken fetches CSRF token from login page.
+// Deprecated: 建议使用 GetCSRFTokenWithContext
+func (s *Service) GetCSRFToken() (string, error) {
+	return s.GetCSRFTokenWithContext(context.Background())
+}
+
+// Login performs login operation.
+// Deprecated: 建议使用 LoginWithContext
+func (s *Service) Login() error {
+	return s.LoginWithContext(context.Background())
+}
+
+// Sign performs sign-in operation.
+// Deprecated: 建议使用 SignWithContext
+func (s *Service) Sign() (*SignResponse, error) {
+	return s.SignWithContext(context.Background())
 }
 
 // truncateBody returns the first 200 bytes of body for error messages.
