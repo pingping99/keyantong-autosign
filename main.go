@@ -8,10 +8,12 @@ import (
 	"keyantong/config"
 	"keyantong/core"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -45,7 +47,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("初始化状态存储失败: %v", err)
 	}
-	service, err := core.NewService(cfg.Email, cfg.Password, cfg.APIBaseURL, cfg.APILoginPath, cfg.APISignPath)
+	service, err := core.NewService(
+		cfg.Email,
+		cfg.Password,
+		cfg.APIBaseURL,
+		cfg.APILoginPath,
+		cfg.APISignPath,
+	)
 	if err != nil {
 		log.Fatalf("初始化签到服务失败: %v", err)
 	}
@@ -53,7 +61,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	healthServer := startHealthServer(cfg.HealthCheckPort)
+	healthServer := startHealthServer(cfg.HealthCheckHost, cfg.HealthCheckPort)
 	defer shutdownHealthServer(healthServer)
 
 	log.Printf("单账户签到服务已启动，账户: %s，时区: %s", maskEmail(cfg.Email), cfg.Location)
@@ -88,8 +96,8 @@ func calculateNextCheckInterval(cfg *config.AppConfig) time.Duration {
 	if core.IsWithinHourRange(now, cfg.Location, cfg.EarlyHourThreshold, cfg.LateHourThreshold) {
 		return cfg.CheckInterval
 	}
-	jitter := core.CalculateJitter(5 * time.Minute)
-	return core.TimeUntilNextWorkingTime(now, cfg.Location, cfg.EarlyHourThreshold) + jitter
+	return core.TimeUntilNextWorkingTime(now, cfg.Location, cfg.EarlyHourThreshold) +
+		core.CalculateJitter(5*time.Minute)
 }
 
 func runCheck(ctx context.Context, signer core.Signer, cfg *config.AppConfig) {
@@ -102,7 +110,7 @@ func runCheck(ctx context.Context, signer core.Signer, cfg *config.AppConfig) {
 	}
 }
 
-func startHealthServer(port int) *http.Server {
+func startHealthServer(host string, port int) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(writer http.ResponseWriter, _ *http.Request) {
 		info := core.GetHealth()
@@ -116,8 +124,10 @@ func startHealthServer(port int) *http.Server {
 			log.Printf("写入健康检查响应失败: %v", err)
 		}
 	})
+
+	address := net.JoinHostPort(host, strconv.Itoa(port))
 	server := &http.Server{
-		Addr:              fmt.Sprintf(":%d", port),
+		Addr:              address,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -125,7 +135,7 @@ func startHealthServer(port int) *http.Server {
 		IdleTimeout:       30 * time.Second,
 	}
 	go func() {
-		log.Printf("健康检查监听端口 %d", port)
+		log.Printf("健康检查监听 %s", address)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("健康检查服务异常: %v", err)
 		}
