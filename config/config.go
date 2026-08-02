@@ -18,13 +18,13 @@ const (
 	DefaultForceSignOnStart   = false
 	DefaultEarlyHourThreshold = 8
 	DefaultLateHourThreshold  = 22
+	DefaultHealthCheckHost    = "127.0.0.1"
 	DefaultHealthCheckPort    = 8080
 	DefaultAPIBaseURL         = "https://www.ablesci.com"
 	DefaultAPILoginPath       = "/site/login"
 	DefaultAPISignPath        = "/user/sign"
 )
 
-// AppConfig contains the complete single-account runtime configuration.
 type AppConfig struct {
 	Email              string
 	Password           string
@@ -36,13 +36,13 @@ type AppConfig struct {
 	ForceSignOnStart   bool
 	EarlyHourThreshold int
 	LateHourThreshold  int
+	HealthCheckHost    string
 	HealthCheckPort    int
 	APIBaseURL         string
 	APILoginPath       string
 	APISignPath        string
 }
 
-// Load reads configuration with priority ENV > config.yaml/config.yml > defaults.
 func Load() (*AppConfig, error) {
 	var yamlCfg *YAMLConfig
 	configPath := FindConfigFile()
@@ -52,6 +52,14 @@ func Load() (*AppConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("load configuration %q: %w", configPath, err)
 		}
+	}
+
+	email, password, err := resolveCredentials(
+		os.Getenv("ABLESCI_EMAIL"), os.Getenv("ABLESCI_PASSWORD"),
+		yamlString(yamlCfg, "email"), yamlString(yamlCfg, "password"),
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	checkInterval, err := parseDuration(
@@ -75,7 +83,6 @@ func Load() (*AppConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	forceSignOnStart, err := resolveBool(
 		os.Getenv("FORCE_SIGN_ON_START"),
 		yamlBool(yamlCfg),
@@ -116,20 +123,21 @@ func Load() (*AppConfig, error) {
 	}
 
 	cfg := &AppConfig{
-		Email:              strings.TrimSpace(resolve(os.Getenv("ABLESCI_EMAIL"), yamlString(yamlCfg, "email"))),
-		Password:           resolve(os.Getenv("ABLESCI_PASSWORD"), yamlString(yamlCfg, "password")),
-		DataDir:            resolve(os.Getenv("DATA_DIR"), yamlString(yamlCfg, "data_dir"), DefaultDataDir),
-		CheckInterval:      checkInterval,
-		RetryInterval:      retryInterval,
-		SignJitterMax:      signJitterMax,
-		Location:           location,
-		ForceSignOnStart:   forceSignOnStart,
-		EarlyHourThreshold: earlyHour,
-		LateHourThreshold:  lateHour,
-		HealthCheckPort:    healthPort,
-		APIBaseURL:         strings.TrimRight(resolve(os.Getenv("API_BASE_URL"), yamlString(yamlCfg, "api_base_url"), DefaultAPIBaseURL), "/"),
-		APILoginPath:       resolve(os.Getenv("API_LOGIN_PATH"), yamlString(yamlCfg, "api_login_path"), DefaultAPILoginPath),
-		APISignPath:        resolve(os.Getenv("API_SIGN_PATH"), yamlString(yamlCfg, "api_sign_path"), DefaultAPISignPath),
+		Email:                email,
+		Password:             password,
+		DataDir:              resolve(os.Getenv("DATA_DIR"), yamlString(yamlCfg, "data_dir"), DefaultDataDir),
+		CheckInterval:        checkInterval,
+		RetryInterval:        retryInterval,
+		SignJitterMax:        signJitterMax,
+		Location:             location,
+		ForceSignOnStart:     forceSignOnStart,
+		EarlyHourThreshold:   earlyHour,
+		LateHourThreshold:    lateHour,
+		HealthCheckHost:      resolve(os.Getenv("HEALTH_CHECK_HOST"), yamlString(yamlCfg, "health_check_host"), DefaultHealthCheckHost),
+		HealthCheckPort:      healthPort,
+		APIBaseURL:           strings.TrimRight(resolve(os.Getenv("API_BASE_URL"), yamlString(yamlCfg, "api_base_url"), DefaultAPIBaseURL), "/"),
+		APILoginPath:         resolve(os.Getenv("API_LOGIN_PATH"), yamlString(yamlCfg, "api_login_path"), DefaultAPILoginPath),
+		APISignPath:          resolve(os.Getenv("API_SIGN_PATH"), yamlString(yamlCfg, "api_sign_path"), DefaultAPISignPath),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -137,10 +145,25 @@ func Load() (*AppConfig, error) {
 	return cfg, nil
 }
 
-// Validate rejects unsafe or ambiguous runtime settings.
+func resolveCredentials(envEmail, envPassword, yamlEmail, yamlPassword string) (string, string, error) {
+	envEmail = strings.TrimSpace(envEmail)
+	yamlEmail = strings.TrimSpace(yamlEmail)
+
+	if envEmail != "" || envPassword != "" {
+		if envEmail == "" || envPassword == "" {
+			return "", "", fmt.Errorf("ABLESCI_EMAIL and ABLESCI_PASSWORD must be set together")
+		}
+		return envEmail, envPassword, nil
+	}
+	if yamlEmail == "" || yamlPassword == "" {
+		return "", "", fmt.Errorf("single account credentials are required: set both ABLESCI_EMAIL and ABLESCI_PASSWORD, or email/password in config.yaml")
+	}
+	return yamlEmail, yamlPassword, nil
+}
+
 func (cfg *AppConfig) Validate() error {
 	if cfg.Email == "" || cfg.Password == "" {
-		return fmt.Errorf("single account credentials are required: set both ABLESCI_EMAIL and ABLESCI_PASSWORD, or email/password in config.yaml")
+		return fmt.Errorf("single account credentials are required")
 	}
 	if cfg.DataDir == "" {
 		return fmt.Errorf("DATA_DIR must not be empty")
@@ -163,9 +186,13 @@ func (cfg *AppConfig) Validate() error {
 	if cfg.EarlyHourThreshold >= cfg.LateHourThreshold {
 		return fmt.Errorf("EARLY_HOUR_THRESHOLD must be earlier than LATE_HOUR_THRESHOLD")
 	}
+	if strings.TrimSpace(cfg.HealthCheckHost) == "" || strings.ContainsAny(cfg.HealthCheckHost, " \t\r\n") {
+		return fmt.Errorf("HEALTH_CHECK_HOST must be a host name or IP address")
+	}
 	if cfg.HealthCheckPort < 1 || cfg.HealthCheckPort > 65535 {
 		return fmt.Errorf("HEALTH_CHECK_PORT must be between 1 and 65535")
 	}
+
 	parsedURL, err := url.Parse(cfg.APIBaseURL)
 	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
 		return fmt.Errorf("API_BASE_URL must be an absolute URL")
@@ -243,6 +270,8 @@ func yamlString(cfg *YAMLConfig, field string) string {
 		return cfg.SignJitterMax
 	case "timezone":
 		return cfg.Timezone
+	case "health_check_host":
+		return cfg.HealthCheckHost
 	case "api_base_url":
 		return cfg.APIBaseURL
 	case "api_login_path":
