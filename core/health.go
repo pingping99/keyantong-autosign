@@ -45,9 +45,7 @@ func MarkHealthFailure(at time.Time, err error) {
 	defer healthState.Unlock()
 	healthState.status = "failed"
 	healthState.lastAttemptAt = at
-	if err != nil {
-		healthState.lastError = err.Error()
-	}
+	healthState.lastError = PublicError(err)
 }
 
 func GetHealth() HealthInfo {
