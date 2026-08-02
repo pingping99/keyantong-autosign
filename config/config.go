@@ -123,21 +123,21 @@ func Load() (*AppConfig, error) {
 	}
 
 	cfg := &AppConfig{
-		Email:                email,
-		Password:             password,
-		DataDir:              resolve(os.Getenv("DATA_DIR"), yamlString(yamlCfg, "data_dir"), DefaultDataDir),
-		CheckInterval:        checkInterval,
-		RetryInterval:        retryInterval,
-		SignJitterMax:        signJitterMax,
-		Location:             location,
-		ForceSignOnStart:     forceSignOnStart,
-		EarlyHourThreshold:   earlyHour,
-		LateHourThreshold:    lateHour,
-		HealthCheckHost:      resolve(os.Getenv("HEALTH_CHECK_HOST"), yamlString(yamlCfg, "health_check_host"), DefaultHealthCheckHost),
-		HealthCheckPort:      healthPort,
-		APIBaseURL:           strings.TrimRight(resolve(os.Getenv("API_BASE_URL"), yamlString(yamlCfg, "api_base_url"), DefaultAPIBaseURL), "/"),
-		APILoginPath:         resolve(os.Getenv("API_LOGIN_PATH"), yamlString(yamlCfg, "api_login_path"), DefaultAPILoginPath),
-		APISignPath:          resolve(os.Getenv("API_SIGN_PATH"), yamlString(yamlCfg, "api_sign_path"), DefaultAPISignPath),
+		Email:              email,
+		Password:           password,
+		DataDir:            resolve(os.Getenv("DATA_DIR"), yamlString(yamlCfg, "data_dir"), DefaultDataDir),
+		CheckInterval:      checkInterval,
+		RetryInterval:      retryInterval,
+		SignJitterMax:      signJitterMax,
+		Location:           location,
+		ForceSignOnStart:   forceSignOnStart,
+		EarlyHourThreshold: earlyHour,
+		LateHourThreshold:  lateHour,
+		HealthCheckHost:    resolve(os.Getenv("HEALTH_CHECK_HOST"), yamlString(yamlCfg, "health_check_host"), DefaultHealthCheckHost),
+		HealthCheckPort:    healthPort,
+		APIBaseURL:         strings.TrimRight(resolve(os.Getenv("API_BASE_URL"), yamlString(yamlCfg, "api_base_url"), DefaultAPIBaseURL), "/"),
+		APILoginPath:       resolve(os.Getenv("API_LOGIN_PATH"), yamlString(yamlCfg, "api_login_path"), DefaultAPILoginPath),
+		APISignPath:        resolve(os.Getenv("API_SIGN_PATH"), yamlString(yamlCfg, "api_sign_path"), DefaultAPISignPath),
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
