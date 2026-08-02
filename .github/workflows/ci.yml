@@ -21,7 +21,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
+          cache: false
       - name: Format check
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           files="$(gofmt -l .)"
