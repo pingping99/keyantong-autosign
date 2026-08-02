@@ -1,6 +1,6 @@
 ---
 # AbleSci 自动签到配置（仅支持单账户）
-# 配置优先级: 环境变量 > config.yaml/config.yml > 默认值
+# 配置优先级：完整环境变量凭证 > config.yaml/config.yml > 默认值
 
 email: user@example.com
 password: "replace-with-your-password"
@@ -16,7 +16,8 @@ force_sign_on_start: false
 early_hour_threshold: 8
 late_hour_threshold: 22
 
-# 健康检查
+# 默认仅监听本机；需要从其他主机访问时显式改为 0.0.0.0
+health_check_host: 127.0.0.1
 health_check_port: 8080
 
 # API 设置，一般无需修改
