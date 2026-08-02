@@ -4,6 +4,7 @@ services:
     image: keyantong-autosign:latest
     container_name: keyantong-autosign
     restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
     environment:
       ABLESCI_EMAIL: ${ABLESCI_EMAIL}
       ABLESCI_PASSWORD: ${ABLESCI_PASSWORD}
@@ -15,6 +16,7 @@ services:
       LATE_HOUR_THRESHOLD: ${LATE_HOUR_THRESHOLD:-22}
       TZ: ${TZ:-Asia/Shanghai}
       DATA_DIR: /app/data
+      HEALTH_CHECK_HOST: 127.0.0.1
       HEALTH_CHECK_PORT: 8080
     volumes:
       - ./data:/app/data
