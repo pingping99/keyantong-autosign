@@ -99,6 +99,19 @@ func GetErrorType(err error) ErrorType {
 	return ErrTypeUnknown
 }
 
+// PublicError returns a health-safe summary and intentionally omits causes,
+// upstream response bodies, account information, and other diagnostic details.
+func PublicError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var signErr *SignError
+	if errors.As(err, &signErr) {
+		return signErr.Type.String()
+	}
+	return ErrTypeUnknown.String()
+}
+
 func WrapError(err error, errType ErrorType, message string) error {
 	if err == nil {
 		return nil
