@@ -9,8 +9,6 @@ import (
 )
 
 // YAMLConfig represents the supported subset of config.yaml.
-// The project deliberately supports only scalar keys and the legacy one-level
-// api section so configuration remains dependency-free and predictable.
 type YAMLConfig struct {
 	Email              string
 	Password           string
@@ -19,6 +17,7 @@ type YAMLConfig struct {
 	RetryInterval      string
 	SignJitterMax      string
 	Timezone           string
+	HealthCheckHost    string
 	HealthCheckPort    string
 	ForceSignOnStart   *bool
 	EarlyHourThreshold *int
@@ -35,7 +34,6 @@ var configSearchPaths = []string{
 	"data/config.yml",
 }
 
-// FindConfigFile returns CONFIG_FILE when set, otherwise searches default paths.
 func FindConfigFile() string {
 	if path := strings.TrimSpace(os.Getenv("CONFIG_FILE")); path != "" {
 		return path
@@ -48,7 +46,6 @@ func FindConfigFile() string {
 	return ""
 }
 
-// LoadYAML parses the small YAML subset used by this project.
 func LoadYAML(path string) (*YAMLConfig, error) {
 	if path == "" {
 		return nil, nil
@@ -123,6 +120,8 @@ func assignYAMLValue(cfg *YAMLConfig, key, value string) error {
 		cfg.SignJitterMax = value
 	case "timezone":
 		cfg.Timezone = value
+	case "health_check_host":
+		cfg.HealthCheckHost = value
 	case "health_check_port":
 		cfg.HealthCheckPort = value
 	case "force_sign_on_start":
