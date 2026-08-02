@@ -106,15 +106,16 @@ func (signer *AccountSigner) executeSign(ctx context.Context, state *SignState, 
 		return storeErr
 	}
 
-	MarkHealthAttempt(scheduledAt)
 	log.Printf("执行%s，当前时间 %s", reason, scheduledAt.Format(TimeLayout))
 
 	maxJitter := signer.maxJitterBeforeWorkEnd(scheduledAt)
 	jitter, completed := signer.waitWithJitter(ctx, maxJitter)
 	if !completed {
-		err := NewSignError(ErrTypeTimeout, "签到在随机等待期间被取消", ctx.Err())
-		signer.markFailure(state, signer.localNow(), err)
-		return err
+		state.LastResult = "cancelled"
+		if err := signer.store.Save(state); err != nil {
+			log.Printf("保存取消状态失败: %v", err)
+		}
+		return NewSignError(ErrTypeTimeout, "签到在随机等待期间被取消", ctx.Err())
 	}
 	if jitter > 0 {
 		log.Printf("执行前随机等待: %v", jitter.Round(time.Second))
@@ -130,6 +131,7 @@ func (signer *AccountSigner) executeSign(ctx context.Context, state *SignState, 
 		MarkHealthFailure(requestAt, storeErr)
 		return storeErr
 	}
+	MarkHealthAttempt(requestAt)
 
 	response, err := signer.performSignWithRetry(ctx)
 	completedAt := signer.localNow()
