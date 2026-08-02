@@ -1,0 +1,13 @@
+.git
+.github
+.env
+.env.*
+config.yaml
+config.yml
+data/
+*.log
+*.exe
+*.out
+keyantong-autosign
+ablesci-sign
+README.md
