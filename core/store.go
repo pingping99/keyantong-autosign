@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
 
 type StateStore interface {
-	Load() (*SignState, error)
+	Load(accountID string) (*SignState, error)
 	Save(state *SignState) error
 }
 
@@ -32,27 +33,46 @@ func (store *FileStore) statePath() string {
 	return filepath.Join(store.dataDir, "state.json")
 }
 
-func (store *FileStore) Load() (*SignState, error) {
+func (store *FileStore) Load(accountID string) (*SignState, error) {
 	path := store.statePath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &SignState{}, nil
+			return &SignState{AccountID: accountID}, nil
 		}
 		return nil, fmt.Errorf("read state: %w", err)
 	}
+
 	var state SignState
 	if err := json.Unmarshal(data, &state); err != nil {
-		corruptPath := fmt.Sprintf("%s.corrupt-%s", path, time.Now().Format("20060102-150405"))
-		if renameErr := os.Rename(path, corruptPath); renameErr != nil {
+		quarantinePath := store.quarantinePath("corrupt")
+		if renameErr := os.Rename(path, quarantinePath); renameErr != nil {
 			return nil, fmt.Errorf("decode state: %w; quarantine failed: %v", err, renameErr)
 		}
-		return nil, fmt.Errorf("decode state: %w; corrupt file moved to %s", err, corruptPath)
+		return nil, fmt.Errorf("decode state: %w; corrupt file moved to %s", err, quarantinePath)
+	}
+
+	if state.AccountID != "" && state.AccountID != accountID {
+		quarantinePath := store.quarantinePath("account-mismatch")
+		if err := os.Rename(path, quarantinePath); err != nil {
+			return nil, fmt.Errorf("quarantine state for another account: %w", err)
+		}
+		return &SignState{AccountID: accountID}, nil
+	}
+	if state.AccountID == "" {
+		state.AccountID = accountID
 	}
 	return &state, nil
 }
 
 func (store *FileStore) Save(state *SignState) error {
+	if state == nil {
+		return fmt.Errorf("state must not be nil")
+	}
+	if state.AccountID == "" {
+		return fmt.Errorf("state account_id must not be empty")
+	}
+
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode state: %w", err)
@@ -80,13 +100,52 @@ func (store *FileStore) Save(state *SignState) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close state: %w", err)
 	}
-	if err := os.Rename(temporaryPath, store.statePath()); err != nil {
+	if err := replaceStateFile(temporaryPath, store.statePath()); err != nil {
 		return fmt.Errorf("replace state: %w", err)
+	}
+
+	if runtime.GOOS != "windows" {
+		if directory, err := os.Open(store.dataDir); err == nil {
+			_ = directory.Sync()
+			_ = directory.Close()
+		}
 	}
 	return nil
 }
 
-// MigrateSingleAccountState copies a previous account-specific state file to state.json.
+// replaceStateFile uses rename-based replacement on Unix. Windows does not
+// guarantee the same atomic semantics, so it uses a recoverable backup swap.
+func replaceStateFile(source, target string) error {
+	if runtime.GOOS != "windows" {
+		return os.Rename(source, target)
+	}
+
+	backup := target + ".bak"
+	_ = os.Remove(backup)
+	if _, err := os.Stat(target); err == nil {
+		if err := os.Rename(target, backup); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := os.Rename(source, target); err != nil {
+		if _, backupErr := os.Stat(backup); backupErr == nil {
+			_ = os.Rename(backup, target)
+		}
+		return err
+	}
+	_ = os.Remove(backup)
+	return nil
+}
+
+func (store *FileStore) quarantinePath(reason string) string {
+	return fmt.Sprintf("%s.%s-%d", store.statePath(), reason, time.Now().UnixNano())
+}
+
+// MigrateSingleAccountState copies the matching legacy account state and marks
+// it untrusted so the next valid attempt confirms the remote state again.
 func MigrateSingleAccountState(dataDir, email string) error {
 	target := filepath.Join(dataDir, "state.json")
 	if _, err := os.Stat(target); err == nil {
@@ -95,8 +154,9 @@ func MigrateSingleAccountState(dataDir, email string) error {
 		return err
 	}
 
-	for _, accountID := range []string{generateAccountID(email), generateLegacyAccountID(email)} {
-		source := filepath.Join(dataDir, fmt.Sprintf("state_%s.json", accountID))
+	accountID := GenerateAccountID(email)
+	for _, legacyID := range []string{accountID, generateLegacyAccountID(email)} {
+		source := filepath.Join(dataDir, fmt.Sprintf("state_%s.json", legacyID))
 		data, err := os.ReadFile(source)
 		if os.IsNotExist(err) {
 			continue
@@ -104,11 +164,19 @@ func MigrateSingleAccountState(dataDir, email string) error {
 		if err != nil {
 			return fmt.Errorf("read legacy state: %w", err)
 		}
+
 		var state SignState
 		if err := json.Unmarshal(data, &state); err != nil {
 			return fmt.Errorf("legacy state %s is invalid: %w", source, err)
 		}
-		if err := os.WriteFile(target, data, 0o600); err != nil {
+		state.AccountID = accountID
+		state.Version = 0
+
+		encoded, err := json.MarshalIndent(&state, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode migrated state: %w", err)
+		}
+		if err := os.WriteFile(target, encoded, 0o600); err != nil {
 			return fmt.Errorf("write migrated state: %w", err)
 		}
 		return nil
@@ -116,7 +184,7 @@ func MigrateSingleAccountState(dataDir, email string) error {
 	return nil
 }
 
-func generateAccountID(email string) string {
+func GenerateAccountID(email string) string {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	hash := sha256.Sum256([]byte(normalized))
 	return hex.EncodeToString(hash[:])[:12]
