@@ -1,136 +1,166 @@
-# AbleSci 自动签到 (keyantong-autosign)
+# AbleSci 自动签到（keyantong-autosign）
 
-科研通 (AbleSci.com) 自动签到工具，支持多账户管理、随机签到窗口、Docker 部署。
+科研通（AbleSci.com）单账户自动签到工具。程序在设定的工作时间内生成每日随机签到时间，自动处理会话过期，并将本地状态、日志和健康信息持久化。
 
-## 功能特性
+## 主要特性
 
-- 🔄 **多账户支持** — 同时管理多个账户，独立状态跟踪
-- 🎲 **随机签到窗口** — 每日生成随机签到时间，避免检测
-- ⏰ **工作时间限制** — 仅在设定时间范围内执行签到
-- 🔁 **自动重试** — 登录过期自动重登、失败自动重试
-- 📝 **日志轮转** — 自动管理日志文件大小
-- 🐳 **Docker 支持** — 开箱即用的容器化部署
+- **单账户运行**：仅接受一个 AbleSci 邮箱和密码，避免账户选择和状态混淆。
+- **随机签到时间**：每天在工作时间窗口内生成随机执行时间。
+- **自动重新登录**：检测到登录页重定向或未登录页面后，重新登录并重试一次。
+- **严格结果判定**：只有签到成功或服务器明确返回“今日已签到”时，才写入成功状态。
+- **失败重试节流**：失败后按照 `retry_interval` 控制下一次尝试。
+- **状态保护**：状态文件原子写入；损坏文件会被隔离为 `.corrupt-*`。
+- **健康检查**：提供 `/health` 接口，失败状态返回 HTTP 503。
+- **零外部 Go 依赖**：只使用 Go 标准库。
+
+## 重要说明
+
+本地 `state.json` 只是调度缓存，服务器响应才是签到结果的最终依据。HTTP 200 不等于业务签到成功；未知业务响应码会记录为失败并继续按重试间隔尝试。
 
 ## 快速开始
 
-### 方式一：config.yml（推荐）
-
-```bash
-cp config.yaml.example config.yml
-# 编辑 config.yml，填入账户信息
-go run main.go
-```
-
-### 方式二：环境变量
+### 环境变量
 
 ```bash
 export ABLESCI_EMAIL=your@example.com
 export ABLESCI_PASSWORD=your_password
-go run main.go
+go run .
 ```
 
-### 方式三：Docker
+### YAML 配置
+
+```bash
+cp config.yaml.example config.yaml
+# 编辑 email 和 password
+go run .
+```
+
+程序依次搜索：
+
+1. `CONFIG_FILE` 指定的文件；
+2. `config.yaml`；
+3. `config.yml`；
+4. `data/config.yaml`；
+5. `data/config.yml`。
+
+环境变量优先级高于配置文件。
+
+## 配置项
+
+| 环境变量 | YAML 键名 | 默认值 | 说明 |
+|---|---|---:|---|
+| `ABLESCI_EMAIL` | `email` | 无 | 必填，单个账户邮箱 |
+| `ABLESCI_PASSWORD` | `password` | 无 | 必填，单个账户密码 |
+| `DATA_DIR` | `data_dir` | `./data` | 状态和日志目录 |
+| `CHECK_INTERVAL` | `check_interval` | `30m` | 正常检查间隔 |
+| `RETRY_INTERVAL` | `retry_interval` | `10m` | 失败后的最短重试间隔 |
+| `SIGN_JITTER_MAX` | `sign_jitter_max` | `5m` | 每次请求前的最大随机等待；设为 `0s` 可关闭 |
+| `FORCE_SIGN_ON_START` | `force_sign_on_start` | `false` | 启动后是否立即尝试签到，仍会检查工作时间、已签到状态和重试节流 |
+| `TZ` | `timezone` | `Asia/Shanghai` | 调度时区 |
+| `EARLY_HOUR_THRESHOLD` | `early_hour_threshold` | `8` | 工作时间开始小时，范围 0–23 |
+| `LATE_HOUR_THRESHOLD` | `late_hour_threshold` | `22` | 工作时间结束小时，范围 1–24 |
+| `HEALTH_CHECK_PORT` | `health_check_port` | `8080` | 健康检查端口 |
+| `API_BASE_URL` | `api.base_url` | AbleSci 地址 | API 基础地址 |
+| `API_LOGIN_PATH` | `api.login_path` | `/site/login` | 登录路径 |
+| `API_SIGN_PATH` | `api.sign_path` | `/user/sign` | 签到路径 |
+
+时间间隔使用 Go duration 格式，例如 `30m`、`1h`、`2h30m`。配置错误会使程序直接退出，不会静默回退。
+
+### YAML 语法范围
+
+为保持零外部依赖，配置解析器支持本项目示例所需的标量键和一层 `api:` 配置。密码含有 `#`、冒号或前后空格时，应使用单引号或双引号：
+
+```yaml
+password: 'p@ss: word #1'
+```
+
+旧的 `accounts:` 数组和 `data/accounts.json` 已移除，程序发现 `accounts:` 时会明确报错。
+
+## Docker Compose
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入账户信息
+# 编辑 .env 中的账户凭证
 docker compose up -d --build
+docker compose logs -f keyantong-autosign
 ```
 
-## 配置
+健康检查在容器内部访问：
 
-### 配置优先级
-
-```
-环境变量  >  config.yml  >  默认值
+```bash
+wget -qO- http://127.0.0.1:8080/health
 ```
 
-### 配置项
-
-| 配置项 | 环境变量 | YAML 键名 | 默认值 | 说明 |
-|--------|----------|-----------|--------|------|
-| 账户邮箱 | `ABLESCI_EMAIL` | `accounts[].email` | — | 必填 |
-| 账户密码 | `ABLESCI_PASSWORD` | `accounts[].password` | — | 必填 |
-| 数据目录 | `DATA_DIR` | `data_dir` | `./data` | 日志和状态文件 |
-| 检查间隔 | `CHECK_INTERVAL` | `check_interval` | `30m` | Go duration 格式 |
-| 重试间隔 | `RETRY_INTERVAL` | `retry_interval` | `10m` | 签到失败后重试 |
-| 强制启动签到 | `FORCE_SIGN_ON_START` | `force_sign_on_start` | `true` | 启动时立即签到 |
-| 时区 | `TZ` | `timezone` | `Asia/Shanghai` | — |
-| 工作时间起始 | `EARLY_HOUR_THRESHOLD` | `early_hour_threshold` | `8` | 小时 (0-23) |
-| 工作时间结束 | `LATE_HOUR_THRESHOLD` | `late_hour_threshold` | `22` | 小时 (0-23) |
-
-### 账户配置优先级
-
-```
-环境变量 (ABLESCI_EMAIL/PASSWORD)  >  config.yml accounts  >  data/accounts.json
-```
-
-**config.yml 方式（多账户）：**
-
-```yaml
-accounts:
-  - email: user1@example.com
-    password: password1
-  - email: user2@example.com
-    password: password2
-```
-
-**accounts.json 方式：**
+示例响应：
 
 ```json
-[
-  {"email": "user1@example.com", "password": "password1"},
-  {"email": "user2@example.com", "password": "password2"}
-]
+{
+  "status": "success",
+  "last_attempt_at": "2026-08-02T10:00:00+08:00",
+  "last_success_at": "2026-08-02T10:00:00+08:00",
+  "uptime": "3h12m5s"
+}
 ```
 
-## 项目结构
+状态为 `pending` 或 `success` 时返回 HTTP 200，最近一次签到失败时返回 HTTP 503。
 
-```
-keyantong/
-├── main.go              # 入口：组装依赖、启动定时检查
-├── config/
-│   ├── config.go        # 配置加载（优先级解析）、账户加载
-│   └── yaml.go          # 轻量级 YAML 解析器
-├── core/
-│   ├── model.go         # 数据模型（SignState, SignRecord）
-│   ├── store.go         # 状态持久化（文件存储）
-│   ├── service.go       # HTTP 客户端 + AbleSci API
-│   ├── signer.go        # 签到编排（重试、窗口判断）
-│   └── timeutil.go      # 时间工具、随机窗口生成
-├── config.yaml.example   # 配置模板
-├── docker-compose.yml   # Docker 部署
-└── Dockerfile
-```
+## 从多账户版本迁移
+
+升级后只保留一个账户：
+
+1. 删除配置中的 `accounts:` 数组；
+2. 将保留账户写为顶层 `email` 和 `password`，或使用环境变量；
+3. 不再使用 `data/accounts.json`；
+4. 程序会根据邮箱自动查找旧的 `state_<账户ID>.json`，并在 `state.json` 不存在时迁移一次；旧文件会保留作为备份；
+5. 旧版本状态不直接视为可信成功，升级后的首次有效检查会向服务器重新确认，再写入新版状态版本。
 
 ## 签到流程
 
-1. **启动** — 加载配置、初始化各账户签到器
-2. **强制签到**（可选）— 启动时立即签到（尊重工作时间）
-3. **定时检查** — 每 `CHECK_INTERVAL` 检查一次
-4. **随机窗口** — 每日生成随机签到时间，持久化到状态文件
-5. **执行签到** — 到达随机时间后，添加抖动延迟，执行签到
-6. **自动重登** — 会话过期时自动重新登录并重试
-7. **状态记录** — 保存签到结果，防止重复签到
+1. 加载并严格校验单账户配置；
+2. 读取 `state.json`，必要时生成当天随机签到时间；
+3. 到达随机时间后记录本次尝试并加入随机等待；
+4. 发起签到请求；
+5. 仅在检测到会话失效时重新登录并重试一次；
+6. 业务码 `0` 记为成功，业务码 `1` 记为“今日已签到”；
+7. 其他业务码记为失败，不更新 `last_sign_date`；
+8. 按 `retry_interval` 等待下一次尝试。
 
-## 开发
+## 项目结构
 
-```bash
-# 构建
-go build -o ablesci-sign.exe
-
-# 运行
-go run main.go
-
-# Docker
-docker compose up -d --build
-docker compose logs -f ablesci-sign
+```text
+.
+├── main.go
+├── config/
+│   ├── config.go
+│   ├── config_test.go
+│   └── yaml.go
+├── core/
+│   ├── errors.go
+│   ├── health.go
+│   ├── model.go
+│   ├── notification.go
+│   ├── service.go
+│   ├── signer.go
+│   ├── signer_test.go
+│   ├── store.go
+│   ├── store_test.go
+│   └── timeutil.go
+├── config.yaml.example
+├── docker-compose.yml
+├── Dockerfile
+└── .github/workflows/ci.yml
 ```
 
-## 依赖
+## 开发检查
 
-- Go 1.21+
-- 零外部依赖（仅使用标准库）
+```bash
+gofmt -w .
+go vet ./...
+go test -race ./...
+go build ./...
+```
+
+最低 Go 版本为 1.21；CI 和 Docker 构建使用 Go 1.23。
 
 ## 许可
 

@@ -1,12 +1,14 @@
 # Configuration files with credentials
 config.yml
 config.yaml
+.env
 
-# Data directory (state files, logs, accounts)
+# Data directory (state files and logs)
 data/
 
 # Binary files
 *.exe
+keyantong-autosign
 ablesci-sign
 
 # Logs

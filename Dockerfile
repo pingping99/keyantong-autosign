@@ -1,18 +1,20 @@
-FROM golang:1.21-alpine AS builder
-
-ENV CGO_ENABLED=0
+FROM golang:1.23-alpine AS builder
 
 WORKDIR /src
+COPY go.mod ./
 COPY . .
+RUN CGO_ENABLED=0 go test ./... \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/keyantong-autosign .
 
-RUN go mod tidy
-RUN go build -o /app/signbot .
+FROM alpine:3.22
 
-FROM alpine:3.21
-
-RUN apk add --no-cache tzdata
-
+RUN apk add --no-cache ca-certificates tzdata wget
 WORKDIR /app
-COPY --from=builder /app/signbot ./signbot
+COPY --from=builder /out/keyantong-autosign ./keyantong-autosign
 
-ENTRYPOINT ["/app/signbot"]
+ENV DATA_DIR=/app/data \
+    HEALTH_CHECK_PORT=8080
+
+VOLUME ["/app/data"]
+EXPOSE 8080
+ENTRYPOINT ["/app/keyantong-autosign"]

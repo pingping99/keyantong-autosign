@@ -3,424 +3,213 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"keyantong/config"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
 
-// =============================================================================
-// 接口定义
-// =============================================================================
-
-// Signer 签到器接口（支持 Context）
 type Signer interface {
-	// SignOnStartup 启动时签到（原 ForceSign）
-	// 在工作时间内执行签到，非工作时间跳过
 	SignOnStartup(ctx context.Context, now time.Time) error
-
-	// AttemptSign 尝试签到
-	// 检查时间窗口和随机签到时间
 	AttemptSign(ctx context.Context, now time.Time) error
 }
 
-// LegacySigner 旧版接口（向后兼容）
-// Deprecated: 建议使用带 Context 的 Signer 接口
-type LegacySigner interface {
-	AttemptSign(now time.Time) error
-	ForceSign(now time.Time) error
-}
-
-// =============================================================================
-// AccountSigner 实现
-// =============================================================================
-
-// AccountSigner 账户签到器实现
 type AccountSigner struct {
-	service    *Service
+	service    SignService
 	store      StateStore
 	cfg        *config.AppConfig
 	fileLogger *log.Logger
 	mu         sync.Mutex
 }
 
-// NewAccountSigner 创建新的账户签到器
-func NewAccountSigner(
-	svc *Service,
-	store StateStore,
-	cfg *config.AppConfig,
-	fileLogger *log.Logger,
-) *AccountSigner {
-	return &AccountSigner{
-		service:    svc,
-		store:      store,
-		cfg:        cfg,
-		fileLogger: fileLogger,
-	}
+func NewAccountSigner(service SignService, store StateStore, cfg *config.AppConfig, fileLogger *log.Logger) *AccountSigner {
+	return &AccountSigner{service: service, store: store, cfg: cfg, fileLogger: fileLogger}
 }
 
-// SignOnStartup 启动时签到（带 Context 支持）
-// 在工作时间内执行签到，非工作时间跳过
-func (as *AccountSigner) SignOnStartup(ctx context.Context, now time.Time) error {
-	nowLocal := now.In(as.cfg.Location)
-	currentHour := nowLocal.Hour()
-	nowTime := nowLocal.Format(TimeLayout)
+func (signer *AccountSigner) SignOnStartup(ctx context.Context, now time.Time) error {
+	signer.mu.Lock()
+	defer signer.mu.Unlock()
 
-	// 检查工作时间
-	if currentHour < as.cfg.EarlyHourThreshold || currentHour >= as.cfg.LateHourThreshold {
-		log.Printf("当前时间 %s 不在工作时间范围 (%02d:00-%02d:00)，跳过启动签到",
-			nowTime, as.cfg.EarlyHourThreshold, as.cfg.LateHourThreshold)
-		log.Printf("将在工作时间内根据随机窗口自动签到")
+	localNow := now.In(signer.cfg.Location)
+	if !IsWithinHourRange(localNow, signer.cfg.Location, signer.cfg.EarlyHourThreshold, signer.cfg.LateHourThreshold) {
+		log.Printf("当前时间 %s 不在工作时间范围，跳过启动签到", localNow.Format(TimeLayout))
 		return nil
 	}
-
-	log.Printf("执行启动签到")
-
-	// 加载状态
-	state, err := as.store.Load()
+	state, err := signer.store.Load()
 	if err != nil {
-		log.Printf("无法加载状态，使用空状态: %v", err)
-		state = &SignState{}
+		return NewSignError(ErrTypeStore, "加载签到状态失败", err)
 	}
-
-	// 非阻塞抖动等待（支持取消）
-	jitter, ok := WaitWithJitter(ctx, 300)
-	if !ok {
-		return NewSignError(ErrTypeTimeout, "签到被取消（抖动等待期间）", ctx.Err())
-	}
-	log.Printf("执行前随机抖动: %v", jitter)
-
-	// 执行签到
-	return as.doSignWithContext(ctx, state, nowLocal)
-}
-
-// AttemptSign 尝试签到（带 Context 支持）
-func (as *AccountSigner) AttemptSign(ctx context.Context, now time.Time) error {
-	nowLocal := now.In(as.cfg.Location)
-	today := nowLocal.Format(DateLayout)
-	nowTime := nowLocal.Format(TimeLayout)
-
-	// 加载状态
-	state, err := as.store.Load()
-	if err != nil {
-		log.Printf("无法加载状态: %v", err)
-		state = &SignState{}
-	}
-
-	// 检查今日是否已签到
-	if state.LastSignDate == today {
-		as.fileLogger.Printf("今天 (%s) 已完成签到，跳过", today)
+	today := localNow.Format(DateLayout)
+	if state.Version >= CurrentStateVersion && state.LastSignDate == today {
 		return NewSignError(ErrTypeAlreadySigned, "今日已签到", nil)
 	}
-
-	currentHour := nowLocal.Hour()
-
-	// 检查工作时间
-	if currentHour < as.cfg.EarlyHourThreshold {
-		as.fileLogger.Printf("当前时间 %s 不在工作时间 (< %02d:00)，跳过签到",
-			nowTime, as.cfg.EarlyHourThreshold)
+	if signer.shouldThrottle(localNow, state) {
 		return nil
 	}
+	return signer.executeSign(ctx, state, localNow, "启动签到")
+}
 
-	if currentHour >= as.cfg.LateHourThreshold {
-		as.fileLogger.Printf("当前时间 %s 已超过工作时间 (>= %02d:00)，今日不再尝试签到",
-			nowTime, as.cfg.LateHourThreshold)
+func (signer *AccountSigner) AttemptSign(ctx context.Context, now time.Time) error {
+	signer.mu.Lock()
+	defer signer.mu.Unlock()
+
+	localNow := now.In(signer.cfg.Location)
+	today := localNow.Format(DateLayout)
+	nowTime := localNow.Format(TimeLayout)
+	state, err := signer.store.Load()
+	if err != nil {
+		return NewSignError(ErrTypeStore, "加载签到状态失败", err)
+	}
+	if state.Version >= CurrentStateVersion && state.LastSignDate == today {
+		signer.fileLogger.Printf("今天 (%s) 已完成签到，跳过", today)
+		return NewSignError(ErrTypeAlreadySigned, "今日已签到", nil)
+	}
+	if !IsWithinHourRange(localNow, signer.cfg.Location, signer.cfg.EarlyHourThreshold, signer.cfg.LateHourThreshold) {
 		return nil
 	}
-
-	// 确保今日有签到窗口
-	as.ensureWindowForToday(state, today)
-
-	// 检查是否是最后机会
-	isLastChance := false
-	nextCheck := nowLocal.Add(as.cfg.CheckInterval)
-	if nextCheck.Hour() >= as.cfg.LateHourThreshold || nextCheck.Day() != nowLocal.Day() {
-		isLastChance = true
+	if err := signer.ensureWindowForToday(state, today); err != nil {
+		return err
 	}
 
-	// 检查是否到达签到时间
+	nextCheck := localNow.Add(signer.cfg.CheckInterval)
+	isLastChance := nextCheck.Hour() >= signer.cfg.LateHourThreshold || nextCheck.Day() != localNow.Day()
 	if !isLastChance && nowTime < state.WindowSignTime {
-		as.fileLogger.Printf("未到今日随机签到时间 (%s)，当前 %s，等待中",
-			state.WindowSignTime, nowTime)
+		signer.fileLogger.Printf("未到今日随机签到时间 (%s)，当前 %s", state.WindowSignTime, nowTime)
 		return nil
 	}
-
-	if isLastChance && nowTime < state.WindowSignTime {
-		log.Printf("⚠️  接近工作时间结束，提前执行签到（原计划: %s，当前: %s）",
-			state.WindowSignTime, nowTime)
+	if signer.shouldThrottle(localNow, state) {
+		return nil
 	}
-
-	// 节流检查
-	if state.LastAttemptDate == today && state.LastAttemptTime != "" {
-		if as.shouldThrottle(nowLocal, state.LastAttemptTime) {
-			as.fileLogger.Printf("距离上次尝试 (%s) 不足 %v，节流跳过",
-				state.LastAttemptTime, as.cfg.RetryInterval)
-			return nil
-		}
-	}
-
-	// 更新尝试时间
-	state.LastAttemptDate = today
-	state.LastAttemptTime = nowTime
-
-	log.Printf("执行签到... (当前: %s, 计划时间: %s)", nowTime, state.WindowSignTime)
-
-	// 非阻塞抖动等待
-	jitter, ok := WaitWithJitter(ctx, 300)
-	if !ok {
-		return NewSignError(ErrTypeTimeout, "签到被取消（抖动等待期间）", ctx.Err())
-	}
-	log.Printf("执行前随机抖动: %v", jitter)
-
-	// 执行签到
-	resp, err := as.performSignWithRetryContext(ctx)
-	if err != nil {
-		state.LastResult = "failed"
-		UpdateHealth("failed")
-		if saveErr := as.store.Save(state); saveErr != nil {
-			log.Printf("保存失败状态出错: %v", saveErr)
-		}
-		return WrapError(err, ErrTypeNetwork, "签到失败")
-	}
-
-	// 更新时间（签到后）
-	nowLocal = time.Now().In(as.cfg.Location)
-	today = nowLocal.Format(DateLayout)
-	nowTime = nowLocal.Format(TimeLayout)
-
-	as.recordSignState(resp, state, today, nowTime)
-	return nil
+	return signer.executeSign(ctx, state, localNow, "计划签到")
 }
 
-// doSignWithContext 执行签到的公共逻辑
-func (as *AccountSigner) doSignWithContext(ctx context.Context, state *SignState, nowLocal time.Time) error {
-	log.Printf("正在登录...")
-	if err := as.service.LoginWithContext(ctx); err != nil {
-		return NewSignError(ErrTypeAuth, "登录失败", err)
+func (signer *AccountSigner) executeSign(ctx context.Context, state *SignState, attemptAt time.Time, reason string) error {
+	state.LastAttemptDate = attemptAt.Format(DateLayout)
+	state.LastAttemptTime = attemptAt.Format(TimeLayout)
+	state.LastResult = "pending"
+	if err := signer.store.Save(state); err != nil {
+		return NewSignError(ErrTypeStore, "保存签到尝试状态失败", err)
 	}
-	log.Printf("✓ 登录成功")
+	MarkHealthAttempt(attemptAt)
+	log.Printf("执行%s，当前时间 %s", reason, attemptAt.Format(TimeLayout))
 
-	log.Printf("正在签到...")
-	resp, err := as.service.SignWithContext(ctx)
+	jitter, completed := WaitWithJitter(ctx, signer.cfg.SignJitterMax)
+	if !completed {
+		err := NewSignError(ErrTypeTimeout, "签到在随机等待期间被取消", ctx.Err())
+		signer.markFailure(state, attemptAt, err)
+		return err
+	}
+	if jitter > 0 {
+		log.Printf("执行前随机等待: %v", jitter.Round(time.Second))
+	}
+
+	response, err := signer.performSignWithRetry(ctx)
+	completedAt := attemptAt.Add(jitter).In(signer.cfg.Location)
 	if err != nil {
-		return NewSignError(ErrTypeNetwork, "签到失败", err)
+		signer.markFailure(state, completedAt, err)
+		return err
 	}
-
-	// 更新状态
-	today := nowLocal.Format(DateLayout)
-	nowTime := nowLocal.Format(TimeLayout)
-
-	logSignSuccess(resp)
-
-	state.LastSignDate = today
-	state.LastAttemptDate = today
-	state.LastAttemptTime = nowTime
-	state.LastResult = "success"
-		UpdateHealth("success")
-	state.SignHistory = UpdateSignHistory(state.SignHistory, today, nowTime)
-
-	as.logNextSignInfo()
-
-	if err := as.store.Save(state); err != nil {
-		log.Printf("保存状态失败: %v", err)
-	}
-	return nil
+	return signer.recordSignResult(response, state, completedAt)
 }
 
-// performSignWithRetryContext 带重试的签到（支持 Context）
-func (as *AccountSigner) performSignWithRetryContext(ctx context.Context) (*SignResponse, error) {
-	resp, err := as.service.SignWithContext(ctx)
+func (signer *AccountSigner) performSignWithRetry(ctx context.Context) (*SignResponse, error) {
+	response, err := signer.service.SignWithContext(ctx)
+	if err == nil {
+		return response, nil
+	}
+	if !errors.Is(err, ErrLoginRequired) {
+		return nil, WrapError(err, ErrTypeNetwork, "签到请求失败")
+	}
+	log.Printf("会话未登录或已过期，重新登录")
+	if err := signer.service.LoginWithContext(ctx); err != nil {
+		return nil, NewSignError(ErrTypeAuth, "登录失败", err)
+	}
+	response, err = signer.service.SignWithContext(ctx)
 	if err != nil {
 		if errors.Is(err, ErrLoginRequired) {
-			log.Printf("会话未登录或已过期，重新登录")
-			if loginErr := as.service.LoginWithContext(ctx); loginErr != nil {
-				return nil, NewSignError(ErrTypeAuth, "登录失败", loginErr)
-			}
-			resp, err = as.service.SignWithContext(ctx)
-			if err != nil {
-				return nil, NewSignError(ErrTypeNetwork, "登录后签到请求失败", err)
-			}
-		} else {
-			return nil, NewSignError(ErrTypeNetwork, "签到请求失败", err)
+			return nil, NewSignError(ErrTypeAuth, "重新登录后仍要求登录，请检查账号凭证", err)
 		}
+		return nil, WrapError(err, ErrTypeNetwork, "登录后签到请求失败")
 	}
-
-	if isLoginRequiredByCode(resp) {
-		log.Printf("响应码表明需要重新登录，重新登录")
-		if loginErr := as.service.LoginWithContext(ctx); loginErr != nil {
-			return nil, NewSignError(ErrTypeAuth, "登录失败", loginErr)
-		}
-		resp, err = as.service.SignWithContext(ctx)
-		if err != nil {
-			return nil, NewSignError(ErrTypeNetwork, "登录后签到请求失败", err)
-		}
-		if isLoginRequiredByCode(resp) {
-			return nil, NewSignError(ErrTypeAuth, "重新登录后仍无法签到，请检查账号凭证", nil)
-		}
-	}
-
-	return resp, nil
+	return response, nil
 }
 
-// =============================================================================
-// 辅助方法
-// =============================================================================
+func (signer *AccountSigner) recordSignResult(response *SignResponse, state *SignState, completedAt time.Time) error {
+	if response == nil {
+		err := NewSignError(ErrTypeServer, "签到响应为空", nil)
+		signer.markFailure(state, completedAt, err)
+		return err
+	}
 
-func (as *AccountSigner) ensureWindowForToday(state *SignState, today string) {
+	today := completedAt.Format(DateLayout)
+	timeString := completedAt.Format(TimeLayout)
+	switch response.Code {
+	case 0:
+		log.Printf("✓ %s", response.Msg)
+		log.Printf("连续签到: %d 次，本次获得: %d 积分", response.Data.SignCount, response.Data.SignPoint)
+	case 1:
+		log.Printf("✓ %s", response.Msg)
+	default:
+		message := strings.TrimSpace(response.Msg)
+		if message == "" {
+			message = "未知业务错误"
+		}
+		err := NewSignError(ErrTypeServer, fmt.Sprintf("签到未成功：code=%d, message=%s", response.Code, message), nil)
+		signer.markFailure(state, completedAt, err)
+		return err
+	}
+
+	state.Version = CurrentStateVersion
+	state.LastSignDate = today
+	state.LastAttemptDate = today
+	state.LastAttemptTime = timeString
+	state.LastResult = "success"
+	state.SignHistory = UpdateSignHistory(state.SignHistory, today, timeString)
+	if err := signer.store.Save(state); err != nil {
+		storeErr := NewSignError(ErrTypeStore, "保存签到成功状态失败", err)
+		MarkHealthFailure(completedAt, storeErr)
+		return storeErr
+	}
+	MarkHealthSuccess(completedAt)
+	return nil
+}
+
+func (signer *AccountSigner) markFailure(state *SignState, at time.Time, signErr error) {
+	state.LastAttemptDate = at.Format(DateLayout)
+	state.LastAttemptTime = at.Format(TimeLayout)
+	state.LastResult = "failed"
+	if err := signer.store.Save(state); err != nil {
+		log.Printf("保存签到失败状态出错: %v", err)
+	}
+	MarkHealthFailure(at, signErr)
+}
+
+func (signer *AccountSigner) ensureWindowForToday(state *SignState, today string) error {
 	if state.WindowDate == today && state.WindowSignTime != "" {
-		as.fileLogger.Printf("今日签到窗口已存在: %s %s", state.WindowDate, state.WindowSignTime)
-		return
+		return nil
 	}
-
-	signTime := GenerateRandomSignTime(as.cfg.EarlyHourThreshold, as.cfg.LateHourThreshold)
 	state.WindowDate = today
-	state.WindowSignTime = signTime
-
-	log.Printf("生成今日随机签到时间: %s %s", today, signTime)
-
-	if err := as.store.Save(state); err != nil {
-		log.Printf("保存签到窗口失败: %v", err)
+	state.WindowSignTime = GenerateRandomSignTime(signer.cfg.EarlyHourThreshold, signer.cfg.LateHourThreshold)
+	log.Printf("生成今日随机签到时间: %s %s", today, state.WindowSignTime)
+	if err := signer.store.Save(state); err != nil {
+		return NewSignError(ErrTypeStore, "保存签到窗口失败", err)
 	}
+	return nil
 }
 
-func (as *AccountSigner) shouldThrottle(now time.Time, lastAttemptTime string) bool {
-	today := now.Format(DateLayout)
-	lastAttempt, err := ParseDateTime(today, lastAttemptTime, as.cfg.Location)
+func (signer *AccountSigner) shouldThrottle(now time.Time, state *SignState) bool {
+	if state.LastAttemptDate != now.Format(DateLayout) || state.LastAttemptTime == "" {
+		return false
+	}
+	lastAttempt, err := ParseDateTime(state.LastAttemptDate, state.LastAttemptTime, signer.cfg.Location)
 	if err != nil {
 		return false
 	}
-	return now.Sub(lastAttempt) < as.cfg.RetryInterval
-}
-
-func isLoginRequiredByCode(resp *SignResponse) bool {
-	if resp == nil {
-		return true
+	if now.Sub(lastAttempt) >= signer.cfg.RetryInterval {
+		return false
 	}
-	return resp.Code != 0 && resp.Code != 1
-}
-
-func (as *AccountSigner) recordSignState(resp *SignResponse, state *SignState, today, signTime string) {
-	if resp == nil {
-		log.Printf("签到响应为空")
-		return
-	}
-
-	switch resp.Code {
-	case 0:
-		logSignSuccess(resp)
-		state.LastSignDate = today
-		state.LastResult = "success"
-		UpdateHealth("success")
-		state.SignHistory = UpdateSignHistory(state.SignHistory, today, signTime)
-		as.logNextSignInfo()
-	case 1:
-		log.Printf("%s", resp.Msg)
-		state.LastSignDate = today
-		state.LastResult = "success"
-		UpdateHealth("success")
-		state.SignHistory = UpdateSignHistory(state.SignHistory, today, signTime)
-		as.logNextSignInfo()
-	default:
-		log.Printf("签到未成功: %s", resp.Msg)
-		state.LastResult = "failed"
-		UpdateHealth("failed")
-	}
-
-	if err := as.store.Save(state); err != nil {
-		log.Printf("保存签到状态失败: %v", err)
-	}
-}
-
-func logSignSuccess(resp *SignResponse) {
-	if resp == nil {
-		return
-	}
-	log.Printf("✓ %s", resp.Msg)
-	if resp.Code == 0 {
-		log.Printf("  连续签到: %d 次", resp.Data.SignCount)
-		log.Printf("  本次获得: %d 积分", resp.Data.SignPoint)
-		log.Printf("  签到结果详情: %+v", resp)
-	}
-}
-
-func (as *AccountSigner) logNextSignInfo() {
-	now := time.Now().In(as.cfg.Location)
-	tomorrow := now.AddDate(0, 0, 1)
-	tomorrowDate := tomorrow.Format(DateLayout)
-
-	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Printf("下一次签到信息：")
-	log.Printf("  签到日期: %s", tomorrowDate)
-	log.Printf("  工作时间窗口: %02d:00 - %02d:00", as.cfg.EarlyHourThreshold, as.cfg.LateHourThreshold)
-	log.Printf("  签到时间: 将在工作时间窗口内随机生成（避免规律检测）")
-	log.Printf("  非工作时间: 自动跳过，不执行签到")
-	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-}
-
-// =============================================================================
-// 向后兼容：旧版方法（无 Context）
-// =============================================================================
-
-// ForceSign 启动时签到（旧版接口，向后兼容）
-// Deprecated: 建议使用 SignOnStartup(ctx, now)
-func (as *AccountSigner) ForceSign(now time.Time) error {
-	return as.SignOnStartup(context.Background(), now)
-}
-
-// AttemptSignLegacy 尝试签到（旧版接口，向后兼容）
-// 注意：原 AttemptSign(time.Time) 已被新版覆盖
-func (as *AccountSigner) AttemptSignLegacy(now time.Time) error {
-	return as.AttemptSign(context.Background(), now)
-}
-
-// =============================================================================
-// 多账户并发签到
-// =============================================================================
-
-// MultiAccountSigner 多账户签到管理器
-type MultiAccountSigner struct {
-	signers []Signer
-}
-
-// NewMultiAccountSigner 创建多账户签到管理器
-func NewMultiAccountSigner(signers []Signer) *MultiAccountSigner {
-	return &MultiAccountSigner{signers: signers}
-}
-
-// SignAllOnStartup 启动时所有账户并发签到
-func (m *MultiAccountSigner) SignAllOnStartup(ctx context.Context, now time.Time) []error {
-	return m.signAllConcurrent(ctx, now, func(s Signer, ctx context.Context, t time.Time) error {
-		return s.SignOnStartup(ctx, t)
-	})
-}
-
-// AttemptSignAll 尝试所有账户签到
-func (m *MultiAccountSigner) AttemptSignAll(ctx context.Context, now time.Time) []error {
-	return m.signAllConcurrent(ctx, now, func(s Signer, ctx context.Context, t time.Time) error {
-		return s.AttemptSign(ctx, t)
-	})
-}
-
-func (m *MultiAccountSigner) signAllConcurrent(
-	ctx context.Context,
-	now time.Time,
-	signFunc func(Signer, context.Context, time.Time) error,
-) []error {
-	if len(m.signers) == 0 {
-		return nil
-	}
-
-	var wg sync.WaitGroup
-	errs := make([]error, len(m.signers))
-
-	for i, signer := range m.signers {
-		wg.Add(1)
-		go func(idx int, s Signer) {
-			defer wg.Done()
-			errs[idx] = signFunc(s, ctx, now)
-		}(i, signer)
-	}
-
-	wg.Wait()
-	return errs
+	signer.fileLogger.Printf("距离上次尝试 (%s) 不足 %v，跳过", state.LastAttemptTime, signer.cfg.RetryInterval)
+	return true
 }

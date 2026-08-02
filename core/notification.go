@@ -2,25 +2,20 @@ package core
 
 import "log"
 
-// Notifier defines an interface for sending alerts.
 type Notifier interface {
-	Notify(msg string)
+	Notify(message string)
 }
 
-// LogNotifier is a simple implementation that logs to standard output.
 type LogNotifier struct{}
 
-// Notify logs the message with a CRITICAL_FAILURE tag.
-func (n *LogNotifier) Notify(msg string) {
-	log.Printf("[CRITICAL_FAILURE] %s", msg)
+func (notifier *LogNotifier) Notify(message string) {
+	log.Printf("[CRITICAL_FAILURE] %s", message)
 }
 
-// GlobalNotifier is the default notifier.
 var GlobalNotifier Notifier = &LogNotifier{}
 
-// Notify is a convenience function to use the global notifier.
-func Notify(msg string) {
+func Notify(message string) {
 	if GlobalNotifier != nil {
-		GlobalNotifier.Notify(msg)
+		GlobalNotifier.Notify(message)
 	}
 }
