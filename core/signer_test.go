@@ -176,6 +176,30 @@ func TestThrottleUsesCompletionTime(t *testing.T) {
 	}
 }
 
+func TestCancelledJitterDoesNotCreateCompletionThrottle(t *testing.T) {
+	service := &fakeService{}
+	store := &memoryStore{state: &SignState{}}
+	signer := newTestSigner(service, store)
+	signer.cfg.SignJitterMax = time.Minute
+	signer.waitWithJitter = func(context.Context, time.Duration) (time.Duration, bool) {
+		return 0, false
+	}
+
+	err := signer.SignOnStartup(context.Background(), testTime())
+	if err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("expected timeout, got %v", err)
+	}
+	if service.calls != 0 {
+		t.Fatalf("unexpected sign calls: %d", service.calls)
+	}
+	if store.state.LastResult != "cancelled" || store.state.LastCompletedAt != "" {
+		t.Fatalf("cancelled schedule became completed attempt: %#v", store.state)
+	}
+	if signer.shouldThrottle(testTime(), store.state) {
+		t.Fatal("cancelled schedule must not throttle the next real attempt")
+	}
+}
+
 func newTestSigner(service SignService, store StateStore) *AccountSigner {
 	location := time.FixedZone("CST", 8*60*60)
 	cfg := &config.AppConfig{
