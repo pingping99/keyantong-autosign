@@ -14,31 +14,23 @@ import (
 	"time"
 )
 
-// ErrLoginRequired is returned by Sign when the session has expired.
 var ErrLoginRequired = errors.New("login required: session expired or not authenticated")
 
-// Pre-compiled regexps for CSRF token extraction.
+const maxResponseBody = 2 << 20
+
 var (
-	reCSRFMeta     = regexp.MustCompile(`<meta[^>]+name="csrf-token"[^>]+content="([^"]+)"`)
-	reCSRFInput    = regexp.MustCompile(`<input[^>]+name="_csrf"[^>]+value="([^"]+)"`)
-	reCSRFFallback = regexp.MustCompile(`<input[^>]+id="g_csrf_token"[^>]+value="([^"]+)"`)
+	reCSRFMeta     = regexp.MustCompile(`<meta[^>]+name=["']csrf-token["'][^>]+content=["']([^"']+)["']`)
+	reCSRFInput    = regexp.MustCompile(`<input[^>]+name=["']_csrf["'][^>]+value=["']([^"']+)["']`)
+	reCSRFFallback = regexp.MustCompile(`<input[^>]+id=["']g_csrf_token["'][^>]+value=["']([^"']+)["']`)
 )
 
-// commonHeaders contains shared HTTP headers to simulate browser requests.
 var commonHeaders = map[string]string{
-	"User-Agent":         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
-	"Accept":             "application/json, text/javascript, */*; q=0.01",
-	"Accept-Language":    "zh-CN,zh;q=0.9,en;q=0.8",
-	"X-Requested-With":   "XMLHttpRequest",
-	"Sec-CH-UA":          `"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"`,
-	"Sec-CH-UA-Mobile":   "?0",
-	"Sec-CH-UA-Platform": `"Windows"`,
-	"Sec-Fetch-Site":     "same-origin",
-	"Sec-Fetch-Mode":     "cors",
-	"Sec-Fetch-Dest":     "empty",
+	"User-Agent":       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/144.0.0.0 Safari/537.36",
+	"Accept":           "application/json, text/javascript, */*; q=0.01",
+	"Accept-Language":  "zh-CN,zh;q=0.9,en;q=0.8",
+	"X-Requested-With": "XMLHttpRequest",
 }
 
-// SignResponse represents the sign-in response.
 type SignResponse struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
@@ -50,235 +42,212 @@ type SignResponse struct {
 	} `json:"data"`
 }
 
-// LoginResponse represents the login response.
 type LoginResponse struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 }
 
-// Service handles sign-in operations including HTTP transport.
+type SignService interface {
+	LoginWithContext(ctx context.Context) error
+	SignWithContext(ctx context.Context) (*SignResponse, error)
+}
+
 type Service struct {
 	client    *http.Client
 	email     string
 	password  string
-	baseURL   string
+	baseURL   *url.URL
 	loginPath string
 	signPath  string
 }
 
-// NewService creates a new sign-in service with configurable endpoints.
 func NewService(email, password, baseURL, loginPath, signPath string) (*Service, error) {
+	parsedBaseURL, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse base URL: %w", err)
+	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, err
 	}
-
-	client := &http.Client{
-		Jar:     jar,
-		Timeout: 30 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-		Transport: &http.Transport{
-			MaxIdleConns:        10,
-			IdleConnTimeout:     30 * time.Second,
-			TLSHandshakeTimeout: 10 * time.Second,
-			DisableCompression:  false,
-			DisableKeepAlives:   false,
-		},
-	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyFromEnvironment
+	transport.MaxIdleConns = 10
+	transport.MaxIdleConnsPerHost = 5
+	transport.IdleConnTimeout = 30 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = 20 * time.Second
 
 	return &Service{
-		client:    client,
+		client: &http.Client{
+			Jar:       jar,
+			Timeout:   30 * time.Second,
+			Transport: transport,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		email:     email,
 		password:  password,
-		baseURL:   baseURL,
+		baseURL:   parsedBaseURL,
 		loginPath: loginPath,
 		signPath:  signPath,
 	}, nil
 }
 
-// =============================================================================
-// 带 Context 的方法（推荐使用）
-// =============================================================================
-
-// GetCSRFTokenWithContext 获取 CSRF token（支持取消）
-func (s *Service) GetCSRFTokenWithContext(ctx context.Context) (string, error) {
-	loginPageURL := s.baseURL + s.loginPath
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, loginPageURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", commonHeaders["User-Agent"])
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
-	req.Header.Set("Accept-Language", commonHeaders["Accept-Language"])
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", fmt.Errorf("request cancelled: %w", ctx.Err())
-		}
-		return "", fmt.Errorf("failed to get login page: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if match := reCSRFMeta.FindSubmatch(body); len(match) >= 2 {
-		return string(match[1]), nil
-	}
-	if match := reCSRFInput.FindSubmatch(body); len(match) >= 2 {
-		return string(match[1]), nil
-	}
-	if match := reCSRFFallback.FindSubmatch(body); len(match) >= 2 {
-		return string(match[1]), nil
-	}
-
-	return "", fmt.Errorf("CSRF token not found in page")
+func (service *Service) endpoint(path string) string {
+	reference := &url.URL{Path: path}
+	return service.baseURL.ResolveReference(reference).String()
 }
 
-// LoginWithContext 登录（支持取消）
-func (s *Service) LoginWithContext(ctx context.Context) error {
-	csrfToken, err := s.GetCSRFTokenWithContext(ctx)
+func (service *Service) GetCSRFTokenWithContext(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, service.endpoint(service.loginPath), nil)
 	if err != nil {
-		return fmt.Errorf("failed to get CSRF token: %w", err)
+		return "", fmt.Errorf("create login page request: %w", err)
 	}
+	req.Header.Set("User-Agent", commonHeaders["User-Agent"])
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", commonHeaders["Accept-Language"])
 
-	data := url.Values{}
-	data.Set("_csrf", csrfToken)
-	data.Set("email", s.email)
-	data.Set("password", s.password)
-	data.Set("remember", "1")
-
-	loginURL := s.baseURL + s.loginPath
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, loginURL, strings.NewReader(data.Encode()))
+	resp, err := service.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to create login request: %w", err)
-	}
-
-	for k, v := range commonHeaders {
-		req.Header.Set(k, v)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-	req.Header.Set("Origin", s.baseURL)
-	req.Header.Set("Referer", s.baseURL+s.loginPath)
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("login cancelled: %w", ctx.Err())
-		}
-		return fmt.Errorf("failed to send login request: %w", err)
+		return "", requestError(ctx, "get login page", err)
 	}
 	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read login response: %w", err)
+		return "", fmt.Errorf("read login page: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("login page returned status %d: %s", resp.StatusCode, truncateBody(body))
 	}
 
+	for _, expression := range []*regexp.Regexp{reCSRFMeta, reCSRFInput, reCSRFFallback} {
+		if match := expression.FindSubmatch(body); len(match) >= 2 {
+			return string(match[1]), nil
+		}
+	}
+	return "", fmt.Errorf("CSRF token not found in login page")
+}
+
+func (service *Service) LoginWithContext(ctx context.Context) error {
+	csrfToken, err := service.GetCSRFTokenWithContext(ctx)
+	if err != nil {
+		return fmt.Errorf("get CSRF token: %w", err)
+	}
+	form := url.Values{
+		"_csrf":    {csrfToken},
+		"email":    {service.email},
+		"password": {service.password},
+		"remember": {"1"},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, service.endpoint(service.loginPath), strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("create login request: %w", err)
+	}
+	for key, value := range commonHeaders {
+		req.Header.Set(key, value)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	req.Header.Set("Origin", strings.TrimRight(service.baseURL.String(), "/"))
+	req.Header.Set("Referer", service.endpoint(service.loginPath))
+
+	resp, err := service.client.Do(req)
+	if err != nil {
+		return requestError(ctx, "send login request", err)
+	}
+	defer resp.Body.Close()
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read login response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("login failed with status %d: %s", resp.StatusCode, truncateBody(body))
 	}
-
 	var result LoginResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		ct := resp.Header.Get("Content-Type")
-		return fmt.Errorf("failed to parse login response (Content-Type: %q): %w, body: %s", ct, err, truncateBody(body))
+		return fmt.Errorf("parse login response: %w; body: %s", err, truncateBody(body))
 	}
-
 	if result.Code != 0 {
-		msg := result.Msg
-		if msg == "" {
-			msg = fmt.Sprintf("unknown error (code: %d)", result.Code)
+		message := strings.TrimSpace(result.Msg)
+		if message == "" {
+			message = fmt.Sprintf("unknown error code %d", result.Code)
 		}
-		return fmt.Errorf("login failed: %s", msg)
+		return fmt.Errorf("login failed: %s", message)
 	}
-
 	return nil
 }
 
-// SignWithContext 签到（支持取消）
-func (s *Service) SignWithContext(ctx context.Context) (*SignResponse, error) {
-	signURL := s.baseURL + s.signPath
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, signURL, nil)
+func (service *Service) SignWithContext(ctx context.Context) (*SignResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, service.endpoint(service.signPath), nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create sign request: %w", err)
+		return nil, fmt.Errorf("create sign request: %w", err)
 	}
-
-	for k, v := range commonHeaders {
-		req.Header.Set(k, v)
+	for key, value := range commonHeaders {
+		req.Header.Set(key, value)
 	}
-	req.Header.Set("Referer", s.baseURL+"/")
+	req.Header.Set("Referer", service.baseURL.String())
 
-	resp, err := s.client.Do(req)
+	resp, err := service.client.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("sign request cancelled: %w", ctx.Err())
-		}
-		return nil, fmt.Errorf("failed to send sign request: %w", err)
+		return nil, requestError(ctx, "send sign request", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusMovedPermanently {
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		location := resp.Header.Get("Location")
-		if strings.Contains(location, "login") || location == "" {
+		if location == "" || strings.Contains(strings.ToLower(location), "login") {
 			return nil, ErrLoginRequired
 		}
 	}
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read sign response: %w", err)
+		return nil, fmt.Errorf("read sign response: %w", err)
 	}
-
-	if strings.Contains(string(body), `need-login-tips`) || strings.Contains(string(body), `对不起，您的操作需要登录才可以进行`) {
+	bodyText := string(body)
+	if strings.Contains(bodyText, "need-login-tips") || strings.Contains(bodyText, "操作需要登录") {
 		return nil, ErrLoginRequired
 	}
-
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("sign request failed with status %d: %s", resp.StatusCode, truncateBody(body))
+		message := fmt.Sprintf("sign request returned status %d: %s", resp.StatusCode, truncateBody(body))
+		switch {
+		case resp.StatusCode == http.StatusTooManyRequests:
+			return nil, NewSignError(ErrTypeRateLimit, message, nil)
+		case resp.StatusCode >= http.StatusInternalServerError:
+			return nil, NewSignError(ErrTypeServer, message, nil)
+		default:
+			return nil, fmt.Errorf("%s", message)
+		}
 	}
-
-	var signResp SignResponse
-	if err := json.Unmarshal(body, &signResp); err != nil {
-		ct := resp.Header.Get("Content-Type")
-		return nil, fmt.Errorf("failed to parse sign response (Content-Type: %q): %w, body: %s", ct, err, truncateBody(body))
+	var result SignResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse sign response: %w; body: %s", err, truncateBody(body))
 	}
-
-	return &signResp, nil
+	return &result, nil
 }
 
-// =============================================================================
-// 旧版方法（向后兼容）
-// =============================================================================
-
-// GetCSRFToken fetches CSRF token from login page.
-// Deprecated: 建议使用 GetCSRFTokenWithContext
-func (s *Service) GetCSRFToken() (string, error) {
-	return s.GetCSRFTokenWithContext(context.Background())
+func readResponseBody(reader io.Reader) ([]byte, error) {
+	limited := io.LimitReader(reader, maxResponseBody+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxResponseBody {
+		return nil, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+	}
+	return body, nil
 }
 
-// Login performs login operation.
-// Deprecated: 建议使用 LoginWithContext
-func (s *Service) Login() error {
-	return s.LoginWithContext(context.Background())
+func requestError(ctx context.Context, action string, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s cancelled: %w", action, ctx.Err())
+	}
+	return fmt.Errorf("%s: %w", action, err)
 }
 
-// Sign performs sign-in operation.
-// Deprecated: 建议使用 SignWithContext
-func (s *Service) Sign() (*SignResponse, error) {
-	return s.SignWithContext(context.Background())
-}
-
-// truncateBody returns the first 200 bytes of body for error messages.
 func truncateBody(body []byte) string {
-	if len(body) > 200 {
-		return string(body[:200]) + "..."
+	const limit = 200
+	if len(body) > limit {
+		return string(body[:limit]) + "..."
 	}
 	return string(body)
 }

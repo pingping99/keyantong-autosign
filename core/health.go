@@ -5,37 +5,57 @@ import (
 	"time"
 )
 
-// HealthInfo represents the health check response.
 type HealthInfo struct {
-	LastSignAt time.Time `json:"last_sign_at"`
-	Status     string    `json:"status"`
-	Uptime     string    `json:"uptime"`
+	Status        string    `json:"status"`
+	LastAttemptAt time.Time `json:"last_attempt_at,omitempty"`
+	LastSuccessAt time.Time `json:"last_success_at,omitempty"`
+	LastError     string    `json:"last_error,omitempty"`
+	Uptime        string    `json:"uptime"`
 }
 
-var (
-	healthMu         sync.RWMutex
-	globalLastSignAt time.Time
-	globalStatus     string = "pending"
-	StartTime               = time.Now()
-)
-
-// UpdateHealth updates the global health status.
-func UpdateHealth(status string) {
-	healthMu.Lock()
-	defer healthMu.Unlock()
-	globalStatus = status
-	if status == "success" {
-		globalLastSignAt = time.Now()
-	}
+var healthState = struct {
+	sync.RWMutex
+	status        string
+	lastAttemptAt time.Time
+	lastSuccessAt time.Time
+	lastError     string
+	startedAt     time.Time
+}{
+	status:    "pending",
+	startedAt: time.Now(),
 }
 
-// GetHealth retrieves the current health status.
+func MarkHealthAttempt(at time.Time) {
+	healthState.Lock()
+	defer healthState.Unlock()
+	healthState.lastAttemptAt = at
+}
+
+func MarkHealthSuccess(at time.Time) {
+	healthState.Lock()
+	defer healthState.Unlock()
+	healthState.status = "success"
+	healthState.lastAttemptAt = at
+	healthState.lastSuccessAt = at
+	healthState.lastError = ""
+}
+
+func MarkHealthFailure(at time.Time, err error) {
+	healthState.Lock()
+	defer healthState.Unlock()
+	healthState.status = "failed"
+	healthState.lastAttemptAt = at
+	healthState.lastError = PublicError(err)
+}
+
 func GetHealth() HealthInfo {
-	healthMu.RLock()
-	defer healthMu.RUnlock()
+	healthState.RLock()
+	defer healthState.RUnlock()
 	return HealthInfo{
-		LastSignAt: globalLastSignAt,
-		Status:     globalStatus,
-		Uptime:     time.Since(StartTime).String(),
+		Status:        healthState.status,
+		LastAttemptAt: healthState.lastAttemptAt,
+		LastSuccessAt: healthState.lastSuccessAt,
+		LastError:     healthState.lastError,
+		Uptime:        time.Since(healthState.startedAt).Round(time.Second).String(),
 	}
 }

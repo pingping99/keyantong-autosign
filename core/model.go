@@ -1,18 +1,26 @@
 package core
 
-// SignRecord represents a single sign-in record.
+const CurrentStateVersion = 3
+
+// SignRecord represents one successful or already-completed sign-in day.
 type SignRecord struct {
-	Date string `json:"date"` // Sign date (YYYY-MM-DD)
-	Time string `json:"time"` // Sign time (HH:MM:SS)
+	Date string `json:"date"`
+	Time string `json:"time"`
 }
 
-// SignState tracks sign-in state and attempt history.
+// SignState is a local cache. AccountID prevents one account from trusting
+// another account's sign-in state when the same data directory is reused.
 type SignState struct {
-	LastSignDate    string       `json:"last_sign_date"`             // Last successful sign date (YYYY-MM-DD)
-	LastAttemptDate string       `json:"last_attempt_date"`          // Last attempt date (YYYY-MM-DD)
-	LastAttemptTime string       `json:"last_attempt_time"`          // Last attempt time (HH:MM:SS)
-	LastResult      string       `json:"last_result"`                // success/failed/skip
-	SignHistory     []SignRecord `json:"sign_history"`               // Recent sign history (last 14 days)
-	WindowDate      string       `json:"window_date,omitempty"`      // Date for which sign window was generated (YYYY-MM-DD)
-	WindowSignTime  string       `json:"window_sign_time,omitempty"` // Random sign time for the day (HH:MM:SS)
+	Version         int          `json:"version"`
+	AccountID       string       `json:"account_id"`
+	LastSignDate    string       `json:"last_sign_date"`
+	LastAttemptDate string       `json:"last_attempt_date"`
+	LastAttemptTime string       `json:"last_attempt_time"`
+	LastScheduledAt string       `json:"last_scheduled_at,omitempty"`
+	LastRequestAt   string       `json:"last_request_at,omitempty"`
+	LastCompletedAt string       `json:"last_completed_at,omitempty"`
+	LastResult      string       `json:"last_result"`
+	SignHistory     []SignRecord `json:"sign_history"`
+	WindowDate      string       `json:"window_date,omitempty"`
+	WindowSignTime  string       `json:"window_sign_time,omitempty"`
 }

@@ -1,51 +1,27 @@
 ---
-# AbleSci 自动签到配置
-# 配置优先级: 环境变量 > config.yaml > 默认值
-# 使用方法: cp config.yaml.example config.yaml
+# AbleSci 自动签到配置（仅支持单账户）
+# 配置优先级：完整环境变量凭证 > config.yaml/config.yml > 默认值
 
-# ============================================================
-# 基本设置
-# ============================================================
+email: user@example.com
+password: "replace-with-your-password"
 
-# 数据目录（存放日志、状态文件）
 data_dir: ./data
-
-# 时区
 timezone: Asia/Shanghai
 
-# ============================================================
-# 签到策略
-# ============================================================
-
-# 检查间隔（Go duration 格式: 30m, 1h, 2h30m）
+# 定时策略
 check_interval: 30m
-
-# 签到失败后的重试间隔
 retry_interval: 10m
+sign_jitter_max: 5m
+force_sign_on_start: false
+early_hour_threshold: 8
+late_hour_threshold: 22
 
-# 启动时是否立即签到
-force_sign_on_start: true
+# 默认仅监听本机；需要从其他主机访问时显式改为 0.0.0.0
+health_check_host: 127.0.0.1
+health_check_port: 8080
 
-# 工作时间窗口（小时，仅在此范围内执行签到）
-early_hour_threshold: 8   # 起始小时（0-23）
-late_hour_threshold: 22   # 结束小时（0-23）
-
-# ============================================================
-# API 配置（一般无需修改）
-# ============================================================
-
+# API 设置，一般无需修改
 api:
   base_url: https://www.ablesci.com
   login_path: /site/login
   sign_path: /user/sign
-
-# ============================================================
-# 账户列表
-# 也可通过 data/accounts.json 或环境变量配置
-# ============================================================
-
-accounts:
-  - email: user1@example.com
-    password: your_password_here
-  # - email: user2@example.com
-  #   password: your_password_here

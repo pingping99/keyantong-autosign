@@ -1,197 +1,286 @@
 package config
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"log"
+	"net/url"
 	"os"
-	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
 const (
 	DefaultTZ                 = "Asia/Shanghai"
 	DefaultDataDir            = "./data"
+	DefaultCheckInterval      = 30 * time.Minute
 	DefaultRetryInterval      = 10 * time.Minute
-	DefaultForceSignOnStart   = true
+	DefaultSignJitterMax      = 5 * time.Minute
+	DefaultForceSignOnStart   = false
 	DefaultEarlyHourThreshold = 8
 	DefaultLateHourThreshold  = 22
+	DefaultHealthCheckHost    = "127.0.0.1"
+	DefaultHealthCheckPort    = 8080
 	DefaultAPIBaseURL         = "https://www.ablesci.com"
 	DefaultAPILoginPath       = "/site/login"
 	DefaultAPISignPath        = "/user/sign"
 )
 
-var DefaultCheckInterval = 30 * time.Minute
-
-// Account represents a login credential pair.
-type Account struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-// AppConfig contains runtime configuration.
-// Priority: Environment Variables > config.yml > Defaults
 type AppConfig struct {
+	Email              string
+	Password           string
 	DataDir            string
 	CheckInterval      time.Duration
-	Location           *time.Location
 	RetryInterval      time.Duration
+	SignJitterMax      time.Duration
+	Location           *time.Location
 	ForceSignOnStart   bool
 	EarlyHourThreshold int
 	LateHourThreshold  int
+	HealthCheckHost    string
+	HealthCheckPort    int
 	APIBaseURL         string
 	APILoginPath       string
 	APISignPath        string
 }
 
-// Load reads configuration following priority: ENV > config.yml > defaults.
 func Load() (*AppConfig, error) {
-	// Step 1: Try to load config.yml
-	configPath := FindConfigFile()
 	var yamlCfg *YAMLConfig
+	configPath := FindConfigFile()
 	if configPath != "" {
 		var err error
 		yamlCfg, err = LoadYAML(configPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse %s: %w", configPath, err)
-		}
-		if yamlCfg != nil {
-			log.Printf("从 %s 加载配置", configPath)
+			return nil, fmt.Errorf("load configuration %q: %w", configPath, err)
 		}
 	}
 
-	// Step 2: Build config with priority: ENV > YAML > Default
-	cfg := &AppConfig{}
+	email, password, err := resolveCredentials(
+		os.Getenv("ABLESCI_EMAIL"), os.Getenv("ABLESCI_PASSWORD"),
+		yamlString(yamlCfg, "email"), yamlString(yamlCfg, "password"),
+	)
+	if err != nil {
+		return nil, err
+	}
 
-	cfg.DataDir = resolve(os.Getenv("DATA_DIR"), yamlStr(yamlCfg, "data_dir"), DefaultDataDir)
-	cfg.CheckInterval = parseDurationWithDefault(
-		resolve(os.Getenv("CHECK_INTERVAL"), yamlStr(yamlCfg, "check_interval"), ""),
-		DefaultCheckInterval,
+	checkInterval, err := parseDuration(
+		resolve(os.Getenv("CHECK_INTERVAL"), yamlString(yamlCfg, "check_interval"), DefaultCheckInterval.String()),
+		"CHECK_INTERVAL",
 	)
-	cfg.RetryInterval = parseDurationWithDefault(
-		resolve(os.Getenv("RETRY_INTERVAL"), yamlStr(yamlCfg, "retry_interval"), ""),
-		DefaultRetryInterval,
+	if err != nil {
+		return nil, err
+	}
+	retryInterval, err := parseDuration(
+		resolve(os.Getenv("RETRY_INTERVAL"), yamlString(yamlCfg, "retry_interval"), DefaultRetryInterval.String()),
+		"RETRY_INTERVAL",
 	)
-	cfg.ForceSignOnStart = resolveBool(
+	if err != nil {
+		return nil, err
+	}
+	signJitterMax, err := parseDuration(
+		resolve(os.Getenv("SIGN_JITTER_MAX"), yamlString(yamlCfg, "sign_jitter_max"), DefaultSignJitterMax.String()),
+		"SIGN_JITTER_MAX",
+	)
+	if err != nil {
+		return nil, err
+	}
+	forceSignOnStart, err := resolveBool(
 		os.Getenv("FORCE_SIGN_ON_START"),
 		yamlBool(yamlCfg),
 		DefaultForceSignOnStart,
 	)
-	cfg.EarlyHourThreshold = resolveInt(
+	if err != nil {
+		return nil, fmt.Errorf("FORCE_SIGN_ON_START: %w", err)
+	}
+	earlyHour, err := resolveInt(
 		os.Getenv("EARLY_HOUR_THRESHOLD"),
 		yamlInt(yamlCfg, "early"),
 		DefaultEarlyHourThreshold,
 	)
-	cfg.LateHourThreshold = resolveInt(
+	if err != nil {
+		return nil, fmt.Errorf("EARLY_HOUR_THRESHOLD: %w", err)
+	}
+	lateHour, err := resolveInt(
 		os.Getenv("LATE_HOUR_THRESHOLD"),
 		yamlInt(yamlCfg, "late"),
 		DefaultLateHourThreshold,
 	)
-	cfg.APIBaseURL = resolve(os.Getenv("API_BASE_URL"), yamlStr(yamlCfg, "api_base_url"), DefaultAPIBaseURL)
-	cfg.APILoginPath = resolve(os.Getenv("API_LOGIN_PATH"), yamlStr(yamlCfg, "api_login_path"), DefaultAPILoginPath)
-	cfg.APISignPath = resolve(os.Getenv("API_SIGN_PATH"), yamlStr(yamlCfg, "api_sign_path"), DefaultAPISignPath)
-
-	locName := resolve(os.Getenv("TZ"), yamlStr(yamlCfg, "timezone"), DefaultTZ)
-	loc, err := time.LoadLocation(locName)
 	if err != nil {
-		log.Printf("Failed to load timezone %q, falling back to Local: %v", locName, err)
-		loc = time.Local
+		return nil, fmt.Errorf("LATE_HOUR_THRESHOLD: %w", err)
 	}
-	cfg.Location = loc
+	healthPort, err := resolveInt(
+		os.Getenv("HEALTH_CHECK_PORT"),
+		yamlIntString(yamlCfg, "health_check_port"),
+		DefaultHealthCheckPort,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("HEALTH_CHECK_PORT: %w", err)
+	}
 
+	locationName := resolve(os.Getenv("TZ"), yamlString(yamlCfg, "timezone"), DefaultTZ)
+	location, err := time.LoadLocation(locationName)
+	if err != nil {
+		return nil, fmt.Errorf("load timezone %q: %w", locationName, err)
+	}
+
+	cfg := &AppConfig{
+		Email:              email,
+		Password:           password,
+		DataDir:            resolve(os.Getenv("DATA_DIR"), yamlString(yamlCfg, "data_dir"), DefaultDataDir),
+		CheckInterval:      checkInterval,
+		RetryInterval:      retryInterval,
+		SignJitterMax:      signJitterMax,
+		Location:           location,
+		ForceSignOnStart:   forceSignOnStart,
+		EarlyHourThreshold: earlyHour,
+		LateHourThreshold:  lateHour,
+		HealthCheckHost:    resolve(os.Getenv("HEALTH_CHECK_HOST"), yamlString(yamlCfg, "health_check_host"), DefaultHealthCheckHost),
+		HealthCheckPort:    healthPort,
+		APIBaseURL:         strings.TrimRight(resolve(os.Getenv("API_BASE_URL"), yamlString(yamlCfg, "api_base_url"), DefaultAPIBaseURL), "/"),
+		APILoginPath:       resolve(os.Getenv("API_LOGIN_PATH"), yamlString(yamlCfg, "api_login_path"), DefaultAPILoginPath),
+		APISignPath:        resolve(os.Getenv("API_SIGN_PATH"), yamlString(yamlCfg, "api_sign_path"), DefaultAPISignPath),
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
-// LoadAccounts loads accounts following priority:
-//
-//	ENV (ABLESCI_EMAIL/PASSWORD) > config.yml accounts > data/accounts.json
-func LoadAccounts(dataDir string) ([]Account, error) {
-	// Priority 1: Environment variables
-	email := os.Getenv("ABLESCI_EMAIL")
-	password := os.Getenv("ABLESCI_PASSWORD")
-	if email != "" && password != "" {
-		return []Account{{Email: email, Password: password}}, nil
-	}
+func resolveCredentials(envEmail, envPassword, yamlEmail, yamlPassword string) (string, string, error) {
+	envEmail = strings.TrimSpace(envEmail)
+	yamlEmail = strings.TrimSpace(yamlEmail)
 
-	// Priority 2: config.yml accounts section
-	configPath := FindConfigFile()
-	if configPath != "" {
-		yamlCfg, err := LoadYAML(configPath)
-		if err == nil && yamlCfg != nil && len(yamlCfg.Accounts) > 0 {
-			return yamlCfg.Accounts, nil
+	if envEmail != "" || envPassword != "" {
+		if envEmail == "" || envPassword == "" {
+			return "", "", fmt.Errorf("ABLESCI_EMAIL and ABLESCI_PASSWORD must be set together")
 		}
+		return envEmail, envPassword, nil
 	}
-
-	// Priority 3: data/accounts.json file
-	accountsPath := filepath.Join(dataDir, "accounts.json")
-	if data, err := os.ReadFile(accountsPath); err == nil {
-		var accounts []Account
-		if err := json.Unmarshal(data, &accounts); err != nil {
-			return nil, err
-		}
-		if len(accounts) > 0 {
-			return accounts, nil
-		}
+	if yamlEmail == "" || yamlPassword == "" {
+		return "", "", fmt.Errorf("single account credentials are required: set both ABLESCI_EMAIL and ABLESCI_PASSWORD, or email/password in config.yaml")
 	}
-
-	return nil, errors.New("no accounts found: set ABLESCI_EMAIL/PASSWORD env vars, or configure accounts in config.yml, or create data/accounts.json")
+	return yamlEmail, yamlPassword, nil
 }
 
-// --- Priority resolution helpers ---
+func (cfg *AppConfig) Validate() error {
+	if cfg.Email == "" || cfg.Password == "" {
+		return fmt.Errorf("single account credentials are required")
+	}
+	if cfg.DataDir == "" {
+		return fmt.Errorf("DATA_DIR must not be empty")
+	}
+	if cfg.CheckInterval <= 0 {
+		return fmt.Errorf("CHECK_INTERVAL must be greater than zero")
+	}
+	if cfg.RetryInterval <= 0 {
+		return fmt.Errorf("RETRY_INTERVAL must be greater than zero")
+	}
+	if cfg.SignJitterMax < 0 {
+		return fmt.Errorf("SIGN_JITTER_MAX must not be negative")
+	}
+	if cfg.EarlyHourThreshold < 0 || cfg.EarlyHourThreshold > 23 {
+		return fmt.Errorf("EARLY_HOUR_THRESHOLD must be between 0 and 23")
+	}
+	if cfg.LateHourThreshold < 1 || cfg.LateHourThreshold > 24 {
+		return fmt.Errorf("LATE_HOUR_THRESHOLD must be between 1 and 24")
+	}
+	if cfg.EarlyHourThreshold >= cfg.LateHourThreshold {
+		return fmt.Errorf("EARLY_HOUR_THRESHOLD must be earlier than LATE_HOUR_THRESHOLD")
+	}
+	if strings.TrimSpace(cfg.HealthCheckHost) == "" || strings.ContainsAny(cfg.HealthCheckHost, " \t\r\n") {
+		return fmt.Errorf("HEALTH_CHECK_HOST must be a host name or IP address")
+	}
+	if cfg.HealthCheckPort < 1 || cfg.HealthCheckPort > 65535 {
+		return fmt.Errorf("HEALTH_CHECK_PORT must be between 1 and 65535")
+	}
+
+	parsedURL, err := url.Parse(cfg.APIBaseURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return fmt.Errorf("API_BASE_URL must be an absolute URL")
+	}
+	if parsedURL.Scheme != "https" && parsedURL.Scheme != "http" {
+		return fmt.Errorf("API_BASE_URL scheme must be http or https")
+	}
+	if !strings.HasPrefix(cfg.APILoginPath, "/") || !strings.HasPrefix(cfg.APISignPath, "/") {
+		return fmt.Errorf("API paths must start with /")
+	}
+	return nil
+}
 
 func resolve(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
+	for _, value := range values {
+		if value != "" {
+			return value
 		}
 	}
 	return ""
 }
 
-func resolveBool(envVal string, yamlVal *bool, fallback bool) bool {
-	if envVal != "" {
-		return parseBoolWithDefault(envVal, fallback)
+func parseDuration(raw, name string) (time.Duration, error) {
+	duration, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, fmt.Errorf("%s: invalid duration %q: %w", name, raw, err)
 	}
-	if yamlVal != nil {
-		return *yamlVal
-	}
-	return fallback
+	return duration, nil
 }
 
-func resolveInt(envVal string, yamlVal *int, fallback int) int {
-	if envVal != "" {
-		return parseIntWithDefault(envVal, fallback)
+func resolveBool(envValue string, yamlValue *bool, fallback bool) (bool, error) {
+	if envValue != "" {
+		value, err := strconv.ParseBool(strings.ToLower(strings.TrimSpace(envValue)))
+		if err != nil {
+			return false, fmt.Errorf("invalid boolean %q", envValue)
+		}
+		return value, nil
 	}
-	if yamlVal != nil {
-		return *yamlVal
+	if yamlValue != nil {
+		return *yamlValue, nil
 	}
-	return fallback
+	return fallback, nil
 }
 
-// --- YAML accessor helpers ---
+func resolveInt(envValue string, yamlValue *int, fallback int) (int, error) {
+	if envValue != "" {
+		value, err := strconv.Atoi(strings.TrimSpace(envValue))
+		if err != nil {
+			return 0, fmt.Errorf("invalid integer %q", envValue)
+		}
+		return value, nil
+	}
+	if yamlValue != nil {
+		return *yamlValue, nil
+	}
+	return fallback, nil
+}
 
-func yamlStr(cfg *YAMLConfig, field string) string {
+func yamlString(cfg *YAMLConfig, field string) string {
 	if cfg == nil {
 		return ""
 	}
 	switch field {
+	case "email":
+		return cfg.Email
+	case "password":
+		return cfg.Password
 	case "data_dir":
 		return cfg.DataDir
 	case "check_interval":
 		return cfg.CheckInterval
 	case "retry_interval":
 		return cfg.RetryInterval
+	case "sign_jitter_max":
+		return cfg.SignJitterMax
 	case "timezone":
 		return cfg.Timezone
+	case "health_check_host":
+		return cfg.HealthCheckHost
 	case "api_base_url":
-		return cfg.API.BaseURL
+		return cfg.APIBaseURL
 	case "api_login_path":
-		return cfg.API.LoginPath
+		return cfg.APILoginPath
 	case "api_sign_path":
-		return cfg.API.SignPath
+		return cfg.APISignPath
+	default:
+		return ""
 	}
-	return ""
 }
 
 func yamlBool(cfg *YAMLConfig) *bool {
@@ -201,62 +290,28 @@ func yamlBool(cfg *YAMLConfig) *bool {
 	return cfg.ForceSignOnStart
 }
 
-func yamlInt(cfg *YAMLConfig, which string) *int {
+func yamlInt(cfg *YAMLConfig, field string) *int {
 	if cfg == nil {
 		return nil
 	}
-	switch which {
+	switch field {
 	case "early":
 		return cfg.EarlyHourThreshold
 	case "late":
 		return cfg.LateHourThreshold
-	}
-	return nil
-}
-
-// --- Parse helpers ---
-
-func parseDurationWithDefault(raw string, fallback time.Duration) time.Duration {
-	if raw == "" {
-		return fallback
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		log.Printf("invalid duration %q, using default %s: %v", raw, fallback, err)
-		return fallback
-	}
-	return d
-}
-
-func parseBoolWithDefault(raw string, fallback bool) bool {
-	if raw == "" {
-		return fallback
-	}
-	switch raw {
-	case "true", "1", "yes", "on":
-		return true
-	case "false", "0", "no", "off":
-		return false
 	default:
-		log.Printf("invalid boolean %q, using default %t", raw, fallback)
-		return fallback
+		return nil
 	}
 }
 
-func parseIntWithDefault(raw string, fallback int) int {
-	if raw == "" {
-		return fallback
+func yamlIntString(cfg *YAMLConfig, field string) *int {
+	if cfg == nil || field != "health_check_port" || cfg.HealthCheckPort == "" {
+		return nil
 	}
-	var val int
-	_, err := fmt.Sscanf(raw, "%d", &val)
+	value, err := strconv.Atoi(cfg.HealthCheckPort)
 	if err != nil {
-		log.Printf("invalid integer %q, using default %d: %v", raw, fallback, err)
-		return fallback
+		invalid := 0
+		return &invalid
 	}
-	return val
-}
-
-// String implements fmt.Stringer to redact sensitive information
-func (a Account) String() string {
-	return "Account{Email: " + a.Email + ", Password: [REDACTED]}"
+	return &value
 }
